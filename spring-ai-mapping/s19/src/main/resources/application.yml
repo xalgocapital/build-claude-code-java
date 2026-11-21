@@ -1,0 +1,21 @@
+spring:
+  main:
+    web-application-type: none
+  ai:
+    mcp:
+      client:
+        # 对应手写版的 MCP_TIMEOUT_MS=2000
+        request-timeout: 2s
+        stdio:
+          connections:
+            demo:
+              # 和 core/s19-mcp 是同一个 server，cwd 必须指到那个目录
+              command: python3
+              args:
+                - mcp-server.py
+    openai:
+      api-key: ${OPENAI_API_KEY}
+      base-url: ${OPENAI_BASE_URL:https://api.deepseek.com}
+      chat:
+        options:
+          model: ${MODEL_ID:deepseek-chat}

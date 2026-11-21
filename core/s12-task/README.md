@@ -1,234 +1,222 @@
-# s11 · Error Recovery
+# s12 · Task System
 
-s10 把 system prompt 排好了序，省下的是「相同前缀不用重算」。这一篇问的是另一半：
-**请求挂了，那段前缀还发得出去吗？**
+s05 的待办清单只有一个字段是可靠的：它在这一轮里是对的。
+会话一结束就没了，重启就没了，压缩之后只剩摘要里的一句话。
 
 ## 问题
 
-前十篇的循环有一个隐含假设：`createChatCompletion` 要么返回，要么不该返回。
-真实端点不是这样：
+s05 那版 `TodoStore` 有三处「够用就好」：
 
-- 429 限流、503 上游抖动、连接被重置——一分钟里能撞上三次
-- 响应是 200，但 body 半截（流断了、代理截了）——不是 HTTP 错误，是解析失败
-- 上下文超长——服务端直接 400，可你的估算器说「还没到阈值」
-- 工具抛了个空指针——整个循环跟着一起死
-- 模型原地打转，同一个调用发五遍，每遍都觉得自己在尝试
+| 写法 | 当时为什么可以 | 什么时候不行 |
+|---|---|---|
+| 存在内存里 | 一次会话内够用 | 进程被杀、换台机器、第二天接着干 |
+| 一张平表 | 三五件事不需要依赖 | 十件事、有先后、有人认领 |
+| 「做完」由模型说 | 模型通常诚实 | 它说做完的时候，前置可能根本没做 |
 
-这些都不是「模型不够聪明」，是工程上一定发生的事。
-把它们全塞进一个 `catch (Exception e) { throw new RuntimeException(e); }`，
-最常见的结果是：401 被当成网络抖动重试四次，最后报「重试 4 次仍失败」，真正的原因埋在最里面。
+第三处最隐蔽。模型把 `T3` 标成 `completed`，没有任何东西会问它「T3 的前置完成了吗」。
+摘要更不会——摘要只会把「T3 已完成」这句话抄进去，然后这句话就变成了事实。
 
-## 相对 s10 的改动
+## 相对 s11 的改动
 
 | 文件 | 改了什么 |
 |---|---|
-| `Failure.java` | 新增。把失败分成 TRANSIENT / CONTEXT_OVERFLOW / FATAL 三类 |
-| `RetryPolicy.java` | 新增。指数退避 + 等值抖动 + 听 Retry-After |
-| `LoopDetector.java` | 新增。连续相同调用 → 第 3 次提醒、第 5 次中止 |
-| `ApiException.java` | 新增。异常带「哪一类、能不能重试、让等多久」 |
-| `OpenAICompatClient.java` | 重写。重试收进客户端，但对 OVERFLOW 不重试，抛给循环 |
-| `Compactor.java` | 加 `forceCompact()`：被服务端拒了就别再信自己的估算 |
-| `AgentLoop.java` | 工具异常转成 tool 消息；循环检测；超长时压缩后重发 |
-| `fake-endpoint.py` | 重写。主动注入 429 / 503 / 半截 JSON / 400 超长 |
+| `TaskStore.java` | 新增。落盘、依赖、认领、成环检测、孤儿降级 |
+| `AgentLoop.java` | 删掉 `TodoStore`；注册 `task_create` / `task_update` / `task_list`；system 的 `tasks` 段换成任务板 |
+| `fake-endpoint.py` | 重写。两个场景：主流程 11 轮、重启读盘 |
 
-## 三类失败
+`s11` 的错误恢复、循环检测、前缀排序全部保留。
 
-```java
-public static Failure of(int status, String body) {
-    if (body.contains("context_length_exceeded") || ...) return CONTEXT_OVERFLOW;
-    if (status == 408 || status == 429 || status >= 500) return TRANSIENT;
-    return FATAL;
+## 一个任务就是一个文件
+
+```
+.tasks/
+  T1.json
+  T2.json
+  T3.json
+  seq
+```
+
+`T2.json`：
+
+```json
+{
+  "id" : "T2",
+  "subject" : "写回滚方案",
+  "status" : "ORPHANED",
+  "blockedBy" : [ "T1" ],
+  "owner" : "lead",
+  "createdAt" : "11-21 13:56:12",
+  "updatedAt" : "11-21 13:56:23",
+  "note" : "上次会话到这里就断了"
 }
 ```
 
-分类标准只有一个：**重试有没有意义**。不是「错得多严重」。
+一个任务一个文件，不是为了好看。是为了改一个任务不用重写整张表——
+并发认领的时候，两个人改的如果是不同文件，就不会互相覆盖。
 
-- `TRANSIENT`：同一份请求原样再发一次，可能就过了。
-- `CONTEXT_OVERFLOW`：原样重试一万次也一样长。得先压缩，这是循环才有的能力。
-- `FATAL`：401 / 400 参数错。重试只是在烧钱。
+`seq` 单独存一个文件，重启后新任务从 `T4` 继续。这个细节不写会很难受：
+每次重启都从 `T1` 开始，历史记录全被覆盖。
 
-上下文超长在很多兼容端点上返回的也是 400，和「参数写错了」同一个码，所以必须看 body。
-只看状态码的实现，会把超长当成参数错直接放弃——而它其实是可救的。
-
-## 退避：为什么是等值抖动
+## 依赖是约束，不是建议
 
 ```java
-long raw = baseMs * (1L << (attempt - 1));
-long capped = Math.min(raw, capMs);
-long half = capped / 2;
-return half + ThreadLocalRandom.current().nextLong(capped - half + 1);
-```
-
-指数退避解决「别把服务端打死」，抖动解决「别把服务端同时打死」：
-十个客户端在同一毫秒被 429，退避都是 1s，那就在同一毫秒再来一次。
-
-用等值抖动（`[delay/2, delay]`）而不是满抖动（`random(0, delay)`），是因为满抖动的间隔不可预测，
-「第三次比第二次等得久」这种断言写不出来。留一半固定值，既错峰又单调。
-
-`Retry-After` 优先：服务端说等 1 秒就等 1 秒，不按自己的节奏走。
-服务端比客户端更清楚自己什么时候缓过来。
-
-## 重试发的是同一份 messages
-
-```java
-for (int attempt = 1; attempt <= retry.maxAttempts(); attempt++) {
-    try {
-        return once(messages, tools);      // 同一个 messages 引用
-    } catch (ApiException e) { ... }
+if (status == Status.IN_PROGRESS) {
+    List<String> waiting = new ArrayList<>();
+    for (String dep : t.blockedBy()) {
+        Task d = tasks.get(dep);
+        if (d == null || !d.done()) {
+            waiting.add(dep);
+        }
+    }
+    if (!waiting.isEmpty()) {
+        throw new IllegalStateException(id + " 还等着 " + String.join(",", waiting) + " 完成");
+    }
 }
 ```
 
-没有重建数组、没有从某个检查点恢复。重试期间上下文一条不能少——
-半途丢掉的消息在真实场景里就是「模型忘了刚才做了什么」，然后重复一遍已经做过的事。
+这段放在 `task_update` 里，不是写在提示词里让模型自己注意。
 
-假端点用请求体 md5 验证了这一点：前三次 POST 的 body 完全一致。
+提示词是建议，代码是约束。写在提示词里，模型九次遵守、一次不遵守，那一次就是
+「T3 在 T1 没做完的时候被标成了进行中」，而且没人知道。写在代码里，它连试都试不成：
 
-## 工具报错是给模型的输入，不是给程序的信号
-
-```java
-try {
-    output = registry.dispatch(name, args);
-    failed = looksLikeError(output);
-} catch (RuntimeException e) {
-    output = "(error: " + e.getClass().getSimpleName() + ": " + e.getMessage() + ")";
-    failed = true;
-}
-if (failed) {
-    toolErrors++;
-    output = toolError(name, output);      // 包成 <tool-error> 再回灌
-}
+```
+→ task_update(T3 → IN_PROGRESS)
+<tool-error tool="task_update">(error: T3 还等着 T2 完成)
+这次调用失败了。按错误信息改参数或换工具，别把同样的调用再发一次。</tool-error>
 ```
 
-s10 的工具已经有 `(error: ...)` 字符串了，但循环里没人分辨它，
-模型也看不出「这条是失败还是内容里恰好有 error 这个词」。包一层标签，两边都清楚了。
+错误信息里带上了等谁。模型下一轮就知道该先做 T2，而不是再试一次 T3。
 
-重点是那个 `catch`：工具抛异常是最容易把整个循环带走的地方——一个空指针就让整轮对话结束，
-而模型根本没机会知道发生了什么。异常在这里不是控制流，是上下文。
+## 依赖会变，所以得查环
 
-## 死循环：判据只有一个
+需求一变，「谁等谁」就得重排。所以 `task_update` 也接受 `blockedBy`：
 
 ```java
-String fp = name + "|" + canonical(args);
-if (fp.equals(lastFp)) streak++; else { lastFp = fp; streak = 1; }
-if (streak >= STOP_AT) return Decision.STOP;
-if (streak == WARN_AT) return Decision.WARN;
-```
-
-`canonical` 会把字段名排序。模型每次生成的 JSON 字段顺序都可能不一样
-（`{"a":1,"b":2}` 和 `{"b":2,"a":1}`），直接比字符串会把同一个调用判成两个，检测器基本失效。
-
-不看工具结果做判据：结果里带时间戳、带行号、带随机 id，拿它比指纹反而会把「完全相同」判成「不一样」。
-
-第 3 次注入提醒（一条 user 消息，不动 system，不毁 s10 攒的前缀），第 5 次中止。
-中止时那一轮不再执行，但仍然给每条 `tool_call` 回一条 `(not executed)` ——
-配对比执行重要，配对坏了下一次请求直接 400。
-
-代价是会误伤：有些场景确实需要连续读同一个文件三次。所以阈值不能太低，
-而且第一次是提醒不是中止——把判断权还给模型。
-
-## 上下文超长：先承认估算错了
-
-```java
-if (e.failure() == Failure.CONTEXT_OVERFLOW && !overflowRetried) {
-    overflowRetried = true;
-    if (!compactor.forceCompact(messages)) throw e;
-    continue;
+Task candidate = new Task(t.id(), t.subject(), t.status(), List.copyOf(blockedBy), ...);
+tasks.put(id, candidate);
+if (createsCycle(id)) {
+    tasks.put(id, t);                    // 回滚
+    throw new IllegalArgumentException("这个依赖会形成环：" + id + " ← " + ...);
 }
 ```
 
-`forceCompact` 绕过阈值直接压。s08 的 `maybeCompact` 是「自己估算，超了才压」，
-估算和真实 token 数总有偏差；偏差大到被服务端拒了，还拿估算值判断要不要压，就是自欺欺人。
+不查环的后果不是报错，是安静地卡死：A 等 B、B 等 A，两个都永远 `PENDING`，
+`ready()` 永远是空，而系统一切正常。
 
-`overflowRetried` 只救一次：压完还超说明压缩没起作用，再试就是死循环。
+实测里把 `T1` 的依赖改成 `T3`（T3 等 T2，T2 等 T1），直接被拒：
+
+```
+<tool-error tool="task_update">(error: 这个依赖会形成环：T1 ← T3)
+```
+
+## 重启：in_progress 一律降级
+
+```java
+if (t.status() == Status.IN_PROGRESS) {
+    t = t.with(Status.ORPHANED, null, "上次会话到这里就断了");
+    store.save(t);
+}
+```
+
+上次会话死在一个 `in_progress` 的任务上，这件事必须留痕。
+不降级的写法会让新会话看到「T2 正在进行中」，然后它就不管了——实际上没有任何进程在做。
+
+`ORPHANED` 也不是「失败」，它是一个问句：继续，还是重开？这件事交给模型判断，
+但得让它看见。
+
+## 进 system 的那一段：看得见 ≠ 该做
+
+```
+Tasks on disk (they survive restarts; only the "ready" ones are yours to start):
+  ready to start:
+    T1 写迁移脚本
+  blocked (do NOT start these yet):
+    T2 写回滚方案 ← blocked by T1
+    T3 补联合索引 ← blocked by T2
+  orphaned from last session: T2 写回滚方案（决定继续还是重开）
+  completed: 1
+```
+
+五栏，作用不一样：
+
+- `ready` 是「现在可以动手的」。
+- `blocked` 是「存在，但现在别碰」。**把它们藏起来是错的**——模型需要知道后面还有活，
+  否则它会把 T1 做完就宣布任务结束。
+- `in progress` 是「已经有人在做的」。
+- `orphaned` 是「上次断在这儿的」。
+- `completed` 只给个数，不列明细：做完的事除了占 token 没别的用。
+
+这一段挂在 system 的 `ROUND` 档（s10 定义的最后一档）。它每改一次任务就变，
+但它垫在最后，前面攒的前缀不受影响——实测里改任务时打印的是「前缀未变（缓存还能用）」。
+
+如果任务全都完成了，`ready` 和 `blocked` 两栏都会消失，只剩 `completed: 3`。
+空栏不输出，不是输出一行 `(empty)`。
 
 ## 实测
 
-端点主动制造四次故障，加上剧本里的两个麻烦（工具报错、连续 5 次相同调用）：
+主流程 11 轮、11 次 POST，10 项断言全 YES：
 
 ```
-   [fake] POST 1 → 429（Retry-After: 1）
-   [fake] POST 2 → 503
-   [fake] POST 3 → 200 但响应体半截（不是合法 JSON）
-   [fake] 注入 400 context_length_exceeded
+tasks_on_disk=YES             .tasks/ 下 3 个文件，不是内存里的一张表
+dependency_saved=YES          T2 ← T1，T3 ← T2，依赖写在文件里
+status_saved=YES              T1 COMPLETED / T2 IN_PROGRESS，重启不会丢
+blocked_task_rejected=YES     T3 前置没完成，task_update 直接被拒
+cycle_rejected=YES            把 T1 的依赖改成 T3 会绕回去，被拒
+blocked_not_in_ready=YES      被挡住的进 system 时单独一栏
+ready_section_present=YES     中间有任务可开工时单独列出；最后没有可开工的，这一栏消失
+board_in_system_tail=YES      任务板垫在 system 末尾
+no_lost_update=YES            剧本 11 轮跑完
+script_finished=YES
 ```
 
-JVM 侧的退避与恢复：
+然后**把进程杀掉，重新起一遍**，5 项断言全 YES：
 
 ```
-   [retry] 第 1 次失败（HTTP 429 / TRANSIENT / Retry-After 1000ms），1000ms 后重发
-   [retry] 第 2 次失败（HTTP 503 / TRANSIENT），938ms 后重发
-   [retry] 第 3 次失败（HTTP 200 / TRANSIENT），1671ms 后重发
-   [recover] 服务端拒收：上下文超长（HTTP 400），不等估算，直接压一次再发
-   [loop] 连续 3 次相同调用，注入提醒
-   [loop] 连续 5 次相同调用，中止这一轮任务
-   [retry] 共重试 3 次，累计等待 3609ms，最长一次 1671ms
-   [recover] 工具错误 5 次（已回灌给模型），死循环中止 1 次，循环提醒 1 次
+tasks_restored=YES            重启后读回 4 个任务
+orphan_marked=YES             上次死在 in_progress 的 T2 被标成 ORPHANED
+seq_continues=YES             新建的是 T4，不是从 T1 再来一遍
+orphan_visible_in_system=YES  孤儿任务进了 system 的那一段
+script_finished=YES
 ```
 
-注意第 3 行的 `HTTP 200 / TRANSIENT`：HTTP 是成功的，失败发生在解析。
-这一条如果不单独处理，就会被当成「模型返回了空内容」，然后带着空消息继续往下跑。
-
-十七项断言（正常 14 + 反例 3）：
+启动那一行就能看出状态是不是真的从磁盘来的：
 
 ```
-retry_after_honored=YES          服务端说等 1s，实际 1.03s
-backoff_grows=YES                0.58s → 1.48s
-bad_json_retried=YES             半截 JSON 重发了一次
-retry_sends_identical_body=YES   前三次 POST 请求体 md5 相同
-tool_error_fed_back=YES          出现 <tool-error>，模型下一轮换了路径
-tool_error_did_not_kill_loop=YES 工具报错后循环继续跑到第 10 轮
-overflow_recovered=YES           400 超长 → 压缩 1 次 → 重发成功
-loop_warning_injected=YES        第 3 次注入提醒
-loop_warning_reached_model=YES   提醒进了下一轮请求
-loop_stopped_at_five=YES         第 5 次不执行，直接收尾
-not_executed_marked=YES          中止那次仍回了 tool 消息
-tool_pairing_intact=YES          全部请求 tool_call 配对完整
-retry_reported=YES               三次失败都记账
-script_finished=YES              剧本 10 轮跑完
-```
-
-反例那遍（`SCENARIO=fatal`，端点一直返回 401）：
-
-```
-fatal_stopped_at_expected=YES    分类后只发 1 次（反例 RETRY_MODE=naive 时发满 4 次）
-fatal_reported_as_fatal=YES      报的是 FATAL，不是「重试 4 次仍失败」
-fatal_kept_reason=YES            401 与 invalid api key 原样保留
-naive_reports_wrong_reason=YES   （naive 那一遍）最后一句话里没有真正的原因
+   [task] 磁盘上 3 个任务：完成 1，可开工 0，孤儿 1
 ```
 
 ## 跑一遍
 
 ```sh
-# 正常场景
-SCENARIO=main python3 fake-endpoint.py &
-RETRY_MAX=4 RETRY_BASE_MS=500 CONTEXT_LIMIT=8000 \
-  OPENAI_API_KEY=sk-fake OPENAI_BASE_URL=http://127.0.0.1:8911/v1 \
+SCENARIO=main    python3 fake-endpoint.py &   # 端口 8912，会清空 .tasks/ 重建
+OPENAI_API_KEY=sk-fake OPENAI_BASE_URL=http://127.0.0.1:8912/v1 \
   MODEL_ID=fake mvn -q exec:java
 
-# 401 场景（断言里验「不该重试的不重试」）
-SCENARIO=fatal STDOUT_LOG=/tmp/s11_fatal.log python3 fake-endpoint.py &
-OPENAI_API_KEY=sk-fake OPENAI_BASE_URL=http://127.0.0.1:8911/v1 \
+SCENARIO=restart python3 fake-endpoint.py &   # 不清盘，直接读上一轮留下的 .tasks/
+OPENAI_API_KEY=sk-fake OPENAI_BASE_URL=http://127.0.0.1:8912/v1 \
   MODEL_ID=fake mvn -q exec:java
 ```
 
+重启那一遍必须紧接着跑，中间不要清 `.tasks/`——它测的就是「盘上还有东西」。
+
 ## 这一篇没解决的
 
-- **重试会重复扣费**。超时的那一刻，服务端可能已经算完了，钱照付。真实产品要给请求带幂等键。
-- **流式响应的恢复**。流断了以后从第几个 token 续，协议层不支持，只能整条重发。
-- **循环检测的误伤**。连续读同一个文件三遍在有些任务里是合理的。这里靠「先提醒」把判断权还给模型，但不是根本解法。
-- **没有熔断**。连续失败应该停止打同一个端点、切备用，这一篇只做到「这一条请求放弃」。
-- **预算不可见**。重试花了多少钱、退避浪费了多少时间，只有日志，没有指标。
+- **没有并发控制**。两个进程同时改同一个任务，后写的赢。真实场景要给文件加锁或版本号。
+- **没有 owner 校验**。谁都能改任何任务，`owner` 只是个标签。
+- **没有时间维度**。任务没有 due、没有依赖超时，醒来发现「T1 三天没动」这种事不会发生。
+- **没有历史**。改一次覆盖一次，看不到状态变迁。想审计得自己加 append-only 的日志。
+- **任务和 messages 是两套状态**。压缩只压 messages，任务板在 system 里活着——这是好事，
+  但也意味着「任务里写的东西」和「对话里说的东西」可以长期不一致，没有对账机制。
 
 ## 实验条件
 
 | 项目 | 值 |
 | --- | --- |
 | 模型 | `deepseek-chat`（`MODEL_ID` 可换任意 OpenAI 兼容模型） |
-| 重试上限 | `RETRY_MAX=4` |
-| 退避基数 / 上限 | `RETRY_BASE_MS=500` / `RETRY_CAP_MS=8000` |
-| 上下文预算 | `CONTEXT_LIMIT=8000`（触发阈值 0.75，测试里靠端点强制 400） |
-| 故障注入 | 429(Retry-After 1) → 503 → 200 半截 JSON → 400 超长 |
-| 剧本 | 10 轮：工具报错 1 次、改对 1 次、换工具 1 次、连续相同调用 5 次 |
+| 任务目录 | `TASK_DIR` 默认 `.tasks` |
+| 剧本（main） | 11 轮：建 3 个任务、列 1 次、改状态 5 次（含 1 次违规、1 次成环） |
+| 剧本（restart） | 2 轮：新建 1 个任务，验证序号续上 |
+| 上下文预算 | `CONTEXT_LIMIT` 默认 8000（本篇不触发压缩） |
+| 系统提示预算 | `PROMPT_BUDGET` 默认 1200；实测首轮 1171 |
 
-退避的实测值每次都不一样（抖动就是干这个的），所以断言写的是「区间不重叠所以一定更大」，
-不是「等于某个数」。
+`.tasks/` 和 `data/` 都在 `.gitignore` 里，测试产物不入库。

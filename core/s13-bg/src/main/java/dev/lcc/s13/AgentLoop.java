@@ -12,16 +12,14 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * s12: 主 Agent 循环。
+ * s13: 主 Agent 循环。
  *
- * 相对 s09 动了三处，都在 system prompt 上：
- *   1. 那句 SYSTEM 常量拆成 identity / tool-policy 两段
- *   2. 技能目录、记忆目录、待办看板各自成段，按「变化频率」排序拼装
- *   3. s09 那句 if (memory.version() != memoryVersion) 删了——改成每轮都拼，只比字节
+ * 相对 s12 只动了两处：
+ *   1. 注册三个后台任务工具：bash_bg / bash_output / kill_task
+ *   2. 每轮请求前调一次 bg.poll()，把这一轮新结束的任务作为一条 user 消息塞进 messages
  *
- * 第 3 处是本篇的关键。s09 的写法只照顾了记忆：待办变了它不会重拼，技能少了它也不会。
- * 把判断从「什么时候拼」换成「拼出来的字节变了没有」，漏判的可能性就没了：
- * 拼一次是微秒级，判错一次是一整轮缓存白攒。
+ * 第 2 处是这一篇的立场：任务完成是临时事件，走 messages。
+ * 写进 system 就是每完成一个任务把 s10 攒的前缀作废一次——BG_NOTICE=system 是那个反例。
  */
 public class AgentLoop {
     private static final int NAG_AFTER = 3;   // s05 的提醒节奏，本篇不动
@@ -39,6 +37,12 @@ public class AgentLoop {
     private final Compactor compactor;
     private final MemoryStore memory;
     private final SystemPrompt prompt = new SystemPrompt();
+    /** s13：后台任务表。进程、输出文件、offset 都在里面 */
+    private final BackgroundTasks bg;
+    /** messages = 正常写法；system = 反例，把完成通知写进 system */
+    private final String bgNoticeMode = System.getenv().getOrDefault("BG_NOTICE", "messages");
+    /** 反例模式下攒起来的通知，拼进 system 的那一段 */
+    private final List<String> bgSystemNotices = new ArrayList<>();
     /** 会话级：进会话时算一次，中途不再变。所以它可以排在静态段后面 */
     private final String workspace;
     /** s12：连续相同调用的检测。跨轮累计，所以放在循环外面 */
@@ -53,6 +57,25 @@ public class AgentLoop {
         this.mapper = client.mapper();
         this.registry = new ToolRegistry(mapper);
         BuiltinTools.install(registry);   // 5 个基础工具
+
+        // s13：三个后台任务工具。start 立刻返回，输出落盘，靠 poll 收尾
+        this.bg = new BackgroundTasks(mapper);
+        registry.register("bash_bg",
+                "Start a shell command in the background and return immediately. "
+                        + "The loop keeps running while it works; read its output later with bash_output. "
+                        + "Use it for commands that take minutes (test suites, builds, crawls).",
+                bgStartSchema(mapper),
+                args -> bg.start(args.path("command").asText(""),
+                        args.has("timeoutSec") ? args.path("timeoutSec").asInt() : 0));
+        registry.register("bash_output",
+                "Read the output a background task produced SINCE YOUR LAST READ. "
+                        + "Only new lines are returned; do not expect the whole log again.",
+                bgIdSchema(mapper, "id", "Background task id, e.g. bg_1"),
+                args -> bg.output(args.path("id").asText("")));
+        registry.register("kill_task",
+                "Kill a running background task. Its exit code is recorded.",
+                bgIdSchema(mapper, "id", "Background task id, e.g. bg_1"),
+                args -> bg.kill(args.path("id").asText("")));
 
         // s12：任务从内存挪到磁盘。启动时读回来的 in_progress 会被降级成 orphaned
         this.tasks = TaskStore.open(mapper);
@@ -170,6 +193,13 @@ public class AgentLoop {
         }
 
         sections.add(new SystemPrompt.Section("tasks", SystemPrompt.Kind.ROUND, 90, taskSection()));
+
+        if ("system".equals(bgNoticeMode) && !bgSystemNotices.isEmpty()) {
+            // 反例：把它当成 system 的开头。通知是「模型必须看到的信息」，放最前面最不容易漏读。
+            // 这个直觉在 s10 的排序规则里是灾难：它每变一次，后面 4659 个字符全部重付
+            sections.add(new SystemPrompt.Section("background", SystemPrompt.Kind.STATIC, 0,
+                    "Background tasks that finished recently:\n" + String.join("\n", bgSystemNotices)));
+        }
         return prompt.assemble(sections);
     }
 
@@ -199,6 +229,27 @@ public class AgentLoop {
                     .append("（技能正文如已不在上下文里，重新调 skill(name) 取回）");
         }
         return sb.toString().strip();
+    }
+
+    // ---------- s13 的工具 schema ----------
+
+    private static com.fasterxml.jackson.databind.node.ObjectNode bgStartSchema(
+            com.fasterxml.jackson.databind.ObjectMapper m) {
+        var schema = emptySchema(m);
+        var props = m.createObjectNode();
+        props.set("command", prop(m, "string", "The shell command to run in the background"));
+        props.set("timeoutSec", prop(m, "integer", "Optional: kill it after this many seconds (default 600)"));
+        schema.set("properties", props);
+        schema.set("required", m.createArrayNode().add("command"));
+        return schema;
+    }
+
+    private static com.fasterxml.jackson.databind.node.ObjectNode bgIdSchema(
+            com.fasterxml.jackson.databind.ObjectMapper m, String name, String desc) {
+        var schema = emptySchema(m);
+        schema.set("properties", m.createObjectNode().set(name, prop(m, "string", desc)));
+        schema.set("required", m.createArrayNode().add(name));
+        return schema;
     }
 
     // ---------- s12 的工具 schema ----------
@@ -287,6 +338,16 @@ public class AgentLoop {
         int roundsSinceTodo = 0;
 
         while (true) {
+            // s13：每轮请求前收一次。进程不会回调你，不看就永远不知道它结束了
+            List<BackgroundTasks.Finished> bgDone = bg.poll();
+            List<String> bgTexts = new ArrayList<>();
+            for (BackgroundTasks.Finished f : bgDone) {
+                bgTexts.add(bg.notice(f));
+            }
+            if ("system".equals(bgNoticeMode)) {
+                bgSystemNotices.addAll(bgTexts);   // 反例：拼进下面那次 buildPrompt
+            }
+
             // s12：每轮重拼。拼一次很便宜，判错一次是整轮缓存白攒
             SystemPrompt.Assembled now = buildPrompt();
             if (!now.text().equals(lastSystem)) {
@@ -296,6 +357,20 @@ public class AgentLoop {
                         + (now.changed().isEmpty() ? "首次" : "变了 " + String.join("/", now.changed()))
                         + "｜前缀 " + now.prefixHash()
                         + (now.prefixReused() ? " 未变（缓存还能用）" : " 变了"));
+            }
+
+            // s13：结束通知走 messages。一条 user 消息，system 一个字节不动，前缀缓存还能用。
+            // 消息里的内容下几轮会一直留在上下文里，这就是「模型知道它跑完了」的全部来源
+            if (!bgTexts.isEmpty() && !"system".equals(bgNoticeMode)) {
+                ObjectNode notice = mapper.createObjectNode();
+                notice.put("role", "user");
+                notice.put("content", String.join("\n\n", bgTexts));
+                messages.add(notice);
+                System.out.println("\n   [bg] " + bgDone.size() + " 个任务结束，通知作为 user 消息注入"
+                        + "（messages " + messages.size() + " 条，system " + lastSystem.length() + " 字符未变）");
+            } else if (!bgTexts.isEmpty()) {
+                System.out.println("\n   [bg] " + bgDone.size() + " 个任务结束，通知被拼进 system"
+                        + "（反例：前缀作废）");
             }
 
             // s08：进模型之前先看一眼体积。超了就把中间那段换成摘要
@@ -457,6 +532,7 @@ public class AgentLoop {
         memory.report();
         client.retry().report();
         System.out.println("   [task] " + tasks.report());
+        System.out.println("   " + bg.report());
         System.out.println("   [recover] 工具错误 " + toolErrors + " 次（已回灌给模型），"
                 + "死循环中止 " + loopStops + " 次，循环提醒 " + loop.warned() + " 次");
     }
@@ -473,6 +549,13 @@ public class AgentLoop {
 
     /** 打印参数时压成一行摘要 */
     private String brief(String name, JsonNode args) {
+        if ("bash_bg".equals(name)) {
+            return "\"" + args.path("command").asText("") + "\""
+                    + (args.has("timeoutSec") ? " timeout " + args.path("timeoutSec").asInt() + "s" : "");
+        }
+        if ("bash_output".equals(name) || "kill_task".equals(name)) {
+            return args.path("id").asText("");
+        }
         if ("task_create".equals(name)) {
             return "\"" + args.path("subject").asText("") + "\"";
         }
@@ -522,9 +605,7 @@ public class AgentLoop {
         }
         String query = args.length > 0
                 ? String.join(" ", args)
-                : "把这次迁移拆成任务：先写迁移脚本，再写回滚方案，最后补索引。"
-                        + "顺序不能乱，回滚方案必须在迁移脚本之后，补索引必须在回滚方案之后。"
-                        + "拆完就按依赖顺序开工。";
+                : "跑一遍完整测试，同时把 README 里过时的命令改掉。测试要三分钟，别干等。";
         try {
             new AgentLoop(new OpenAICompatClient(baseUrl, apiKey, model)).run(query);
         } catch (ApiException e) {
@@ -566,5 +647,11 @@ public class AgentLoop {
             time, or when the user tells you to remember something, call memory_write with ONE
             sentence-level fact: scope=project for repository facts, scope=user for personal
             preferences. Reuse the existing key when you are correcting a fact.
+            A command that takes minutes (test suite, build, crawl) must not go through bash: bash
+            blocks the loop until it returns. Use bash_bg, keep working on something else, and call
+            bash_output(id) later — it returns ONLY the lines produced since your last read, so do not
+            expect the whole log again. A finished task is reported to you automatically as a message;
+            there is no need to poll bash_output in a loop just to check. Kill what you no longer
+            need with kill_task.
             """;
 }

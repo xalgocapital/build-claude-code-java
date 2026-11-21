@@ -1,234 +1,314 @@
-# s11 · Error Recovery
+# s13 · Background Tasks
 
-s10 把 system prompt 排好了序，省下的是「相同前缀不用重算」。这一篇问的是另一半：
-**请求挂了，那段前缀还发得出去吗？**
+s02 的 bash 是同步的：`readLine` 阻塞到命令结束。一条 `npm test` 跑三分钟，
+这三分钟里循环停在 `registry.dispatch` 那一行，模型什么都做不了。
+
+这一篇只做一件事：**让命令在循环外面跑，让循环接着干活。**
 
 ## 问题
 
-前十篇的循环有一个隐含假设：`createChatCompletion` 要么返回，要么不该返回。
-真实端点不是这样：
+同步 bash 的代价不是「慢」，是「整轮对话被一条命令绑住」：
 
-- 429 限流、503 上游抖动、连接被重置——一分钟里能撞上三次
-- 响应是 200，但 body 半截（流断了、代理截了）——不是 HTTP 错误，是解析失败
-- 上下文超长——服务端直接 400，可你的估算器说「还没到阈值」
-- 工具抛了个空指针——整个循环跟着一起死
-- 模型原地打转，同一个调用发五遍，每遍都觉得自己在尝试
+- 测试跑三分钟，模型这三分钟不能读文件、不能改代码、不能回答用户
+- 想同时跑两个慢命令，只能串行，第二个要等第一个
+- 命令超过 60 秒被 `waitFor` 掐掉，前面的输出也一起丢了
+- 输出全在内存里，进程一死什么都没有
 
-这些都不是「模型不够聪明」，是工程上一定发生的事。
-把它们全塞进一个 `catch (Exception e) { throw new RuntimeException(e); }`，
-最常见的结果是：401 被当成网络抖动重试四次，最后报「重试 4 次仍失败」，真正的原因埋在最里面。
+这四个问题里，前三个都是「等」，第四个是「没落盘」。
 
-## 相对 s10 的改动
+后台任务拆成两半：**进程归操作系统管，输出归文件管**。循环只负责在每轮开始前问一句
+「有没有谁跑完了」。
+
+## 相对 s12 的改动
 
 | 文件 | 改了什么 |
 |---|---|
-| `Failure.java` | 新增。把失败分成 TRANSIENT / CONTEXT_OVERFLOW / FATAL 三类 |
-| `RetryPolicy.java` | 新增。指数退避 + 等值抖动 + 听 Retry-After |
-| `LoopDetector.java` | 新增。连续相同调用 → 第 3 次提醒、第 5 次中止 |
-| `ApiException.java` | 新增。异常带「哪一类、能不能重试、让等多久」 |
-| `OpenAICompatClient.java` | 重写。重试收进客户端，但对 OVERFLOW 不重试，抛给循环 |
-| `Compactor.java` | 加 `forceCompact()`：被服务端拒了就别再信自己的估算 |
-| `AgentLoop.java` | 工具异常转成 tool 消息；循环检测；超长时压缩后重发 |
-| `fake-endpoint.py` | 重写。主动注入 429 / 503 / 半截 JSON / 400 超长 |
+| `BackgroundTasks.java` | 新增。start / output / kill / poll + 元信息落盘，约 300 行 |
+| `AgentLoop.java` | 注册 `bash_bg`、`bash_output`、`kill_task`；每轮请求前 `bg.poll()`，结束通知作为一条 user 消息注入 |
+| `fake-endpoint.py` | 重写。19 轮剧本：后台任务、并行干活、两次增量读、非零退出、超时、kill、200 行截断 |
 
-## 三类失败
+`bash` 留在原地不动。后台不是替代它，是给它加一个「不用等」的选项。
+
+## 进程和输出都落盘
 
 ```java
-public static Failure of(int status, String body) {
-    if (body.contains("context_length_exceeded") || ...) return CONTEXT_OVERFLOW;
-    if (status == 408 || status == 429 || status >= 500) return TRANSIENT;
-    return FATAL;
+ProcessBuilder pb = new ProcessBuilder("sh", "-c", command);
+pb.redirectErrorStream(true);          // stderr 并进来，错误和正常输出才排得上先后
+pb.redirectOutput(out.toFile());       // .bg/bg_1.out
+p = pb.start();                        // 立刻返回，不等
+```
+
+`s02` 是 `p.getInputStream()` + `readLine` 循环。那个循环就是阻塞点：没有新行的时候它停在那里等。
+`redirectOutput` 把这件事交给内核，Java 侧一行都不读。
+
+元信息写 `.bg/<id>.json`：
+
+```json
+{
+  "id" : "bg_1",
+  "command" : "for i in 1 2 3 4 5 6; do echo line-$i; sleep 0.5; done",
+  "pid" : 81234,
+  "status" : "exited",
+  "exit_code" : 0,
+  "offset" : 21,
+  "output" : ".bg/bg_1.out"
 }
 ```
 
-分类标准只有一个：**重试有没有意义**。不是「错得多严重」。
+`exitCode` 单独记一份不是给模型看的，是给下一个进程看的。进程没了，文件还在——
+`ps` 查不到的东西，至少还有一份记录。这一篇没做恢复（重启后读回 `.bg/`），
+但字段先留好了。
 
-- `TRANSIENT`：同一份请求原样再发一次，可能就过了。
-- `CONTEXT_OVERFLOW`：原样重试一万次也一样长。得先压缩，这是循环才有的能力。
-- `FATAL`：401 / 400 参数错。重试只是在烧钱。
+## 增量读：一行 offset
 
-上下文超长在很多兼容端点上返回的也是 400，和「参数写错了」同一个码，所以必须看 body。
-只看状态码的实现，会把超长当成参数错直接放弃——而它其实是可救的。
-
-## 退避：为什么是等值抖动
+`bash_output` 是这一篇最容易写错的地方。最直觉的实现是「把日志文件读出来返回」：
 
 ```java
-long raw = baseMs * (1L << (attempt - 1));
-long capped = Math.min(raw, capMs);
-long half = capped / 2;
-return half + ThreadLocalRandom.current().nextLong(capped - half + 1);
+return Files.readString(out);          // 错
 ```
 
-指数退避解决「别把服务端打死」，抖动解决「别把服务端同时打死」：
-十个客户端在同一毫秒被 429，退避都是 1s，那就在同一毫秒再来一次。
+模型拿到全文，看到最后一行不是它要的，于是再调一次——又是全文。同一段读五遍，
+上下文里五份一样的日志，token 花掉五倍，而模型自己不知道重复了。
 
-用等值抖动（`[delay/2, delay]`）而不是满抖动（`random(0, delay)`），是因为满抖动的间隔不可预测，
-「第三次比第二次等得久」这种断言写不出来。留一半固定值，既错峰又单调。
-
-`Retry-After` 优先：服务端说等 1 秒就等 1 秒，不按自己的节奏走。
-服务端比客户端更清楚自己什么时候缓过来。
-
-## 重试发的是同一份 messages
+正确的那一行：
 
 ```java
-for (int attempt = 1; attempt <= retry.maxAttempts(); attempt++) {
-    try {
-        return once(messages, tools);      // 同一个 messages 引用
-    } catch (ApiException e) { ... }
+String chunk = new String(all, (int) job.offset, (int) (all.length - job.offset), UTF_8);
+...
+job.offset += fresh.getBytes(UTF_8).length;   // 读完就推进
+```
+
+`offset` 推进到**最后一个完整行的末尾**，不是文件末尾：
+
+```java
+int cut = chunk.lastIndexOf('\n');
+if (cut < 0) {
+    if (job.alive()) return "[" + id + " running] 还没有完整的一行";
+    cut = chunk.length() - 1;
 }
 ```
 
-没有重建数组、没有从某个检查点恢复。重试期间上下文一条不能少——
-半途丢掉的消息在真实场景里就是「模型忘了刚才做了什么」，然后重复一遍已经做过的事。
+理由是两件事。进程可能正好写到一半，切在文件末尾会把半个汉字留在这一轮、
+把另一半留给下一轮，解出来是乱码。切在行中间则下一轮会重复半行——
+「不重复」是这个字段唯一的价值，半行重复也算重复。
 
-假端点用请求体 md5 验证了这一点：前三次 POST 的 body 完全一致。
+实测（`bg_1` 每秒吐一行，共六行）：
 
-## 工具报错是给模型的输入，不是给程序的信号
+```
+→ bash_output(bg_1)
+[bg_1 running]
+line-1
+line-2
 
-```java
-try {
-    output = registry.dispatch(name, args);
-    failed = looksLikeError(output);
-} catch (RuntimeException e) {
-    output = "(error: " + e.getClass().getSimpleName() + ": " + e.getMessage() + ")";
-    failed = true;
-}
-if (failed) {
-    toolErrors++;
-    output = toolError(name, output);      // 包成 <tool-error> 再回灌
-}
+→ bash_output(bg_1)          # 2.6 秒之后
+[bg_1 exited 0]
+line-3
+line-4
+line-5
+line-6
 ```
 
-s10 的工具已经有 `(error: ...)` 字符串了，但循环里没人分辨它，
-模型也看不出「这条是失败还是内容里恰好有 error 这个词」。包一层标签，两边都清楚了。
+第一次 28 字符，第二次 43 字符。第二次里没有 `line-1`。
 
-重点是那个 `catch`：工具抛异常是最容易把整个循环带走的地方——一个空指针就让整轮对话结束，
-而模型根本没机会知道发生了什么。异常在这里不是控制流，是上下文。
+## 攒太多就截断
 
-## 死循环：判据只有一个
+不设上限，一条 `yes` 就能把上下文撑爆。所以单次最多回 `READ_TAIL_LINES = 40` 行：
 
-```java
-String fp = name + "|" + canonical(args);
-if (fp.equals(lastFp)) streak++; else { lastFp = fp; streak = 1; }
-if (streak >= STOP_AT) return Decision.STOP;
-if (streak == WARN_AT) return Decision.WARN;
+```
+（本次新增 200 行，只回最后 40 行；更早的 160 行已丢弃）
 ```
 
-`canonical` 会把字段名排序。模型每次生成的 JSON 字段顺序都可能不一样
-（`{"a":1,"b":2}` 和 `{"b":2,"a":1}`），直接比字符串会把同一个调用判成两个，检测器基本失效。
+丢弃的行不补。要精确回溯得自己加 `offset` 参数重读——这一篇没做，
+因为真实场景里「四个小时前那 160 行日志」通常不如「重新跑一遍」便宜。
 
-不看工具结果做判据：结果里带时间戳、带行号、带随机 id，拿它比指纹反而会把「完全相同」判成「不一样」。
+截断的判定放在读的时候，不是写的时候：写的人（子进程）不该知道读的人攒了多久。
 
-第 3 次注入提醒（一条 user 消息，不动 system，不毁 s10 攒的前缀），第 5 次中止。
-中止时那一轮不再执行，但仍然给每条 `tool_call` 回一条 `(not executed)` ——
-配对比执行重要，配对坏了下一次请求直接 400。
+## 完成通知走 messages，不走 system
 
-代价是会误伤：有些场景确实需要连续读同一个文件三次。所以阈值不能太低，
-而且第一次是提醒不是中止——把判断权还给模型。
-
-## 上下文超长：先承认估算错了
+`poll()` 每轮调一次，返回这一轮**新结束**的任务：
 
 ```java
-if (e.failure() == Failure.CONTEXT_OVERFLOW && !overflowRetried) {
-    overflowRetried = true;
-    if (!compactor.forceCompact(messages)) throw e;
-    continue;
+for (Job job : jobs.values()) {
+    if (job.reported) continue;            // 只报一次
+    if (job.process.isAlive()) { ... 超时判定 ... continue; }
+    job.exitCode = job.process.exitValue();
+    job.status = "exited";
+    job.reported = true;
+    done.add(new Finished(job.id, job.exitCode, "exited", tail(job, NOTICE_TAIL_LINES)));
 }
 ```
 
-`forceCompact` 绕过阈值直接压。s08 的 `maybeCompact` 是「自己估算，超了才压」，
-估算和真实 token 数总有偏差；偏差大到被服务端拒了，还拿估算值判断要不要压，就是自欺欺人。
+循环拿到之后，拼成一条 user 消息塞进 messages：
 
-`overflowRetried` 只救一次：压完还超说明压缩没起作用，再试就是死循环。
+```
+[background] bg_1 finished (exit 0)
+最后 6 行：
+line-1
+line-2
+...
+```
+
+不写进 system。理由是 s10 那一篇的：system 是缓存前缀，任何一处变了，后面的 token 全部重算。
+任务完成通知是最典型的**临时事件**——它只对接下来几轮有用，之后就只是历史。
+把它写进 system，等于每完成一个任务就把 4659 个字符的前缀作废一次。
+
+实测 19 个请求，system 一个字节没变：
+
+```
+system_unchanged=YES (19 个请求，1 种 system，md5 7ec1231b，4659 字符)
+notice_in_messages=YES (第 5 轮请求的 messages 里出现 [background] bg_1 finished)
+notice_not_in_system=YES (system 里搜不到 [background])
+```
+
+通知只带最后 20 行（`NOTICE_TAIL_LINES`）。整段输出塞进通知，等于把增量读白做了。
+
+## 超时和 kill 都落在 poll 里
+
+超时的判定不能放在启动的时候等——那就又变回同步了。只能放在 poll：
+
+```java
+long elapsed = (System.currentTimeMillis() - job.startedAt) / 1000;
+if (elapsed >= job.timeoutSec) {
+    destroyTree(job.process);
+    job.exitCode = waitExit(job.process);
+    job.status = "timeout";
+}
+```
+
+`destroyForcibly` 杀的是 `sh`，不是 `sleep`：
+
+```java
+p.descendants().forEach(ProcessHandle::destroyForcibly);
+p.destroyForcibly();
+```
+
+`sh -c "sleep 30"` 里 sh 是父进程、sleep 是子进程。只杀父进程，sleep 还活着，
+输出文件也不关闭，看起来像「杀不掉」。实测两个都死在 137（128 + SIGKILL）：
+
+```
+   [bg] bg_3 超过 1s 没结束，强制杀掉（exit 137）
+   [bg] bg_4 被 kill_task 结束（exit 137）
+```
+
+超时和 kill 的区别只有一个：谁先动手。状态记成 `timeout` 还是 `killed`，
+是为了事后能分清「它太慢」和「我不要了」。
 
 ## 实测
 
-端点主动制造四次故障，加上剧本里的两个麻烦（工具报错、连续 5 次相同调用）：
+19 轮剧本，一个 3 秒的后台任务贯穿前半段：
 
 ```
-   [fake] POST 1 → 429（Retry-After: 1）
-   [fake] POST 2 → 503
-   [fake] POST 3 → 200 但响应体半截（不是合法 JSON）
-   [fake] 注入 400 context_length_exceeded
+   [bg] bg_1 启动 pid 81234，超时 30s：for i in 1 2 3 4 5 6; do echo line-$i; sleep 0.5; done
+bg_1 started (pid 81234, timeout 30s). Read it with bash_output(bg_1); this call returned immediately.
+   [bg] 1 个任务结束，通知作为 user 消息注入（messages 14 条，system 4659 字符未变）
 ```
 
-JVM 侧的退避与恢复：
+起任务那一轮到下一轮请求只隔了 76ms，而任务本身跑了 3.7 秒
+（3 秒的 sleep + 进程启动 + 检测延迟）：
 
 ```
-   [retry] 第 1 次失败（HTTP 429 / TRANSIENT / Retry-After 1000ms），1000ms 后重发
-   [retry] 第 2 次失败（HTTP 503 / TRANSIENT），938ms 后重发
-   [retry] 第 3 次失败（HTTP 200 / TRANSIENT），1671ms 后重发
-   [recover] 服务端拒收：上下文超长（HTTP 400），不等估算，直接压一次再发
-   [loop] 连续 3 次相同调用，注入提醒
-   [loop] 连续 5 次相同调用，中止这一轮任务
-   [retry] 共重试 3 次，累计等待 3609ms，最长一次 1671ms
-   [recover] 工具错误 5 次（已回灌给模型），死循环中止 1 次，循环提醒 1 次
+loop_not_blocked=YES (起任务→下一轮 76ms，任务本身 3.7s)
 ```
 
-注意第 3 行的 `HTTP 200 / TRANSIENT`：HTTP 是成功的，失败发生在解析。
-这一条如果不单独处理，就会被当成「模型返回了空内容」，然后带着空消息继续往下跑。
-
-十七项断言（正常 14 + 反例 3）：
+十五项断言：
 
 ```
-retry_after_honored=YES          服务端说等 1s，实际 1.03s
-backoff_grows=YES                0.58s → 1.48s
-bad_json_retried=YES             半截 JSON 重发了一次
-retry_sends_identical_body=YES   前三次 POST 请求体 md5 相同
-tool_error_fed_back=YES          出现 <tool-error>，模型下一轮换了路径
-tool_error_did_not_kill_loop=YES 工具报错后循环继续跑到第 10 轮
-overflow_recovered=YES           400 超长 → 压缩 1 次 → 重发成功
-loop_warning_injected=YES        第 3 次注入提醒
-loop_warning_reached_model=YES   提醒进了下一轮请求
-loop_stopped_at_five=YES         第 5 次不执行，直接收尾
-not_executed_marked=YES          中止那次仍回了 tool 消息
-tool_pairing_intact=YES          全部请求 tool_call 配对完整
-retry_reported=YES               三次失败都记账
-script_finished=YES              剧本 10 轮跑完
+task_meta_on_disk=YES        .bg/bg_1.json pid=81234，命令原样存着
+loop_not_blocked=YES         起任务→下一轮 76ms，任务本身 3.7s
+first_read_partial=YES       第一次 28 字符，有 line-1，没有 line-6
+second_read_incremental=YES  第二次 43 字符，没有 line-1，有 line-6
+notice_in_messages=YES       第 5 轮请求的 messages 里出现 [background] bg_1 finished
+notice_is_user_role=YES      通知不是 system，是一次请求里新加的 user 消息
+system_unchanged=YES         19 个请求，1 种 system，md5 7ec1231b
+notice_not_in_system=YES     system 里搜不到 [background]
+exit_code_recorded=YES       bg_2 exit_code=3
+exit_code_in_notice=YES      通知里写着 bg_2 finished (exit 3)
+timeout_auto_killed=YES      bg_3 status=timeout，进程已不在
+kill_task_works=YES          bg_4 status=killed，pid 已退出
+output_truncated=YES         200 行只回了 40 行，丢了 160 行
+tool_pairing_intact=YES      全部请求 tool_call 都有回应
+script_finished=YES          剧本 19 轮跑完
 ```
 
-反例那遍（`SCENARIO=fatal`，端点一直返回 401）：
+收尾的汇总：
 
 ```
-fatal_stopped_at_expected=YES    分类后只发 1 次（反例 RETRY_MODE=naive 时发满 4 次）
-fatal_reported_as_fatal=YES      报的是 FATAL，不是「重试 4 次仍失败」
-fatal_kept_reason=YES            401 与 invalid api key 原样保留
-naive_reports_wrong_reason=YES   （naive 那一遍）最后一句话里没有真正的原因
+   [prompt] 本会话 20 轮：前缀复用 19 次，重算 1 次；裁掉的段 workspace
+   [bg] 启动 5 个，正常结束 3，超时 1，被杀 1；bash_output 6 次共回 239 字符，截断丢弃 160 行
 ```
 
-## 跑一遍
+`bash_output` 6 次一共回了 239 字符。如果每次都回全文，这 6 次里至少有一半是重复的。
 
-```sh
-# 正常场景
-SCENARIO=main python3 fake-endpoint.py &
-RETRY_MAX=4 RETRY_BASE_MS=500 CONTEXT_LIMIT=8000 \
-  OPENAI_API_KEY=sk-fake OPENAI_BASE_URL=http://127.0.0.1:8911/v1 \
-  MODEL_ID=fake mvn -q exec:java
+## 反例：把通知写进 system
 
-# 401 场景（断言里验「不该重试的不重试」）
-SCENARIO=fatal STDOUT_LOG=/tmp/s11_fatal.log python3 fake-endpoint.py &
-OPENAI_API_KEY=sk-fake OPENAI_BASE_URL=http://127.0.0.1:8911/v1 \
-  MODEL_ID=fake mvn -q exec:java
+`BG_NOTICE=system` 把它当成 system 的开头——「通知是模型必须看到的信息，放最前面最不容易漏读」。
+这个直觉在 s10 的排序规则里是灾难：
+
 ```
+   [prompt] 重写 messages[0]：变了 background｜前缀 0ca4f7c0 变了
+   [bg] 1 个任务结束，通知被拼进 system（反例：前缀作废）
+```
+
+同一份剧本，19 个请求：
+
+```
+naive_notice_in_system=YES    system 里出现了任务完成通知
+naive_system_changed=YES      19 个请求拼出 5 种 system
+naive_no_user_notice=YES      messages 里没有通知，全进了 system
+naive_prefix_collapsed=YES    4 对变了的相邻请求，公共前缀最多 237 字符，是 4659 的 5%
+```
+
+237 字符是上一次通知的正文。也就是说，每次任务结束，缓存只能复用到上一段通知结束为止，
+后面 4422 个字符全部重算。
+
+两种写法的前缀复用次数（`SystemPrompt` 自己的账）：
+
+```
+messages：前缀复用 19 次，重算 1 次
+system  ：前缀复用 15 次，重算 5 次
+```
+
+19 轮里 4 次通知，`system` 那一遍多算 4 次。任务越多，差得越多。
 
 ## 这一篇没解决的
 
-- **重试会重复扣费**。超时的那一刻，服务端可能已经算完了，钱照付。真实产品要给请求带幂等键。
-- **流式响应的恢复**。流断了以后从第几个 token 续，协议层不支持，只能整条重发。
-- **循环检测的误伤**。连续读同一个文件三遍在有些任务里是合理的。这里靠「先提醒」把判断权还给模型，但不是根本解法。
-- **没有熔断**。连续失败应该停止打同一个端点、切备用，这一篇只做到「这一条请求放弃」。
-- **预算不可见**。重试花了多少钱、退避浪费了多少时间，只有日志，没有指标。
+- **重启即丢**。`.bg/*.json` 落盘了，但没有读回来的代码。进程死了，任务就是死了，模型只会看到上一次读到的位置。
+- **poll 只在轮次边界**。模型一次请求要 20 秒，任务在第 1 秒就结束了，通知要等这 20 秒过完才注入。真要实时，得有回调把它塞进消息队列。
+- **输出是文件，不是流**。子进程如果缓冲（Python 不加 `-u`），文件里半天没有一行，`bash_output` 就一直是「还没有完整的一行」。
+- **没有并发上限**。`bash_bg` 起一百个就真起一百个，没有池子，没有排队。
+- **截断不可逆**。丢掉的行不补，模型只能知道「丢了 160 行」，不能知道内容。
+- **僵尸进程没管**。被 kill 的进程如果自己有子进程树更深，这里只杀一层 descendants。
 
 ## 实验条件
 
 | 项目 | 值 |
 | --- | --- |
-| 模型 | `deepseek-chat`（`MODEL_ID` 可换任意 OpenAI 兼容模型） |
-| 重试上限 | `RETRY_MAX=4` |
-| 退避基数 / 上限 | `RETRY_BASE_MS=500` / `RETRY_CAP_MS=8000` |
-| 上下文预算 | `CONTEXT_LIMIT=8000`（触发阈值 0.75，测试里靠端点强制 400） |
-| 故障注入 | 429(Retry-After 1) → 503 → 200 半截 JSON → 400 超长 |
-| 剧本 | 10 轮：工具报错 1 次、改对 1 次、换工具 1 次、连续相同调用 5 次 |
+| 模型 | 假端点（`MODEL_ID=fake`），剧本固定 19 轮 |
+| 后台任务 | `for i in 1..6; do echo line-$i; sleep 0.5; done`，3 秒 |
+| 读上限 | `READ_TAIL_LINES = 40`；通知带 `NOTICE_TAIL_LINES = 20` |
+| 默认超时 | `DEFAULT_TIMEOUT_SEC = 600`，剧本里显式给 1s / 30s / 60s |
+| 目录 | `.bg/`（`BG_DIR` 可改） |
+| 反例开关 | `BG_NOTICE=system` |
+| 断言 | 正常 15 条 + 反例 5 条 |
 
-退避的实测值每次都不一样（抖动就是干这个的），所以断言写的是「区间不重叠所以一定更大」，
-不是「等于某个数」。
+时间相关的数（76ms、3.7s）每次跑都会抖，所以断言写的是「间隔 < 1 秒且任务 > 2.5 秒」，
+不是等值。237 / 4659 这两个数取决于通知正文的长度，剧本固定，所以能复现。
+
+## 跑一遍
+
+```sh
+cd build-claude-code-java/core/s13-bg
+mvn -q clean compile
+
+SCENARIO=main python3 fake-endpoint.py &
+OPENAI_API_KEY=sk-fake OPENAI_BASE_URL=http://127.0.0.1:8913/v1 \
+  MODEL_ID=fake mvn -q exec:java
+cat /tmp/s13_assert.txt
+
+# 反例
+SCENARIO=naive BG_NOTICE=system ASSERT_LOG=/tmp/s13_assert_naive.txt \
+  STDOUT_LOG=/tmp/s13_stdout_naive.log python3 fake-endpoint.py &
+BG_NOTICE=system OPENAI_API_KEY=sk-fake OPENAI_BASE_URL=http://127.0.0.1:8913/v1 \
+  MODEL_ID=fake mvn -q exec:java
+cat /tmp/s13_assert_naive.txt
+```
