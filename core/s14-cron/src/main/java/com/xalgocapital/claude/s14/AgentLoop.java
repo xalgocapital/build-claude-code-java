@@ -16,7 +16,7 @@ import java.util.List;
  *
  * 相对 s13 只动了一处：注册三个定时任务工具 cron_create / cron_list / cron_delete，
  * 并把 CronScheduler 的守护线程拉起来。循环骨架一行没动——到点触发不经过这里，
- * 调度器自己起会话，自己落日志。这正是和 s13 的分工：
+ * 调度器自己起会话，自己落日志。和 s13 的分工就在这点上：
  *   s13 的后台任务：模型踢一脚才存在，结果由 poll() 送回主会话的 messages
  *   s14 的定时任务：没人踢，到点自己跑，结果落在 .cron/<id>.log 等人来看
  */

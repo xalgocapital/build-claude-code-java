@@ -29,7 +29,7 @@ import java.util.stream.Stream;
  * 手写版加一个工具 = register 一次（schema + handler 绑一起）。
  * 这里加一个工具 = 写一个 @Tool 方法。两边都是「加一处」，但框架那处你看不见它怎么查表。
  *
- * 这正是对照的意义：看懂手写的 Map 查表，你才知道 @Tool 背后发生了什么。
+ * 对照的意义：看懂手写的 Map 查表，你才知道 @Tool 背后发生了什么。
  */
 @SpringBootApplication
 public class SpringAiToolsApp {
