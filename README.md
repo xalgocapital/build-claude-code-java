@@ -15,12 +15,14 @@ core/                     每章手写实现，主线，不依赖任何 Agent �
   s05-todo/               TodoWrite 三态清单 + nag reminder（已落地）
   s06-subagent/           子代理：独立 messages[] + 只回传结论（已落地）
   s07-skill/              技能按需加载：目录常驻 + 正文调用时才进上下文（已落地）
+  s08-compact/            上下文压缩：切点守 tool_call_id 配对，摘要 + 活状态回贴（已落地）
   ...
 spring-ai-mapping/        Spring AI 2.0 对照实现，只挑框架真有对应的章
   s01/                    ToolCallingAdvisor 实现同样的循环（已落地）
   s02/                    @Tool 定义工具（已落地）
   s04/                    自定义 BaseAdvisor = hooks（已落地）
-  （s08 ChatMemory / s19 MCP 为规划项，对应篇章写完后再补对照）
+  s08/                    CompactionAdvisor + MessageWindowChatMemory 对照（已落地）
+  （s19 MCP 为规划项，对应篇章写完后再补对照）
 ```
 
 ## 为什么要分两块
@@ -73,7 +75,7 @@ mvn -q exec:java
 | s05 | TodoWrite | ✅ | — |
 | s06 | Subagent | ✅ | — |
 | s07 | Skill Loading | ✅ | — |
-| s08 | Context Compact | 待更 | 计划 |
+| s08 | Context Compact | ✅ | ✅（`spring-ai-mapping/s08`） |
 | s09 | Memory | 待更 | 计划 |
 | s10 | System Prompt | 待更 | — |
 | s11 | Error Recovery | 待更 | 计划 |
