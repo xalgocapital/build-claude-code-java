@@ -1,0 +1,13 @@
+# Maven 编译产物
+target/
+
+# macOS 杂项
+.DS_Store
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# 本地环境变量（ API key 绝不入库）
+.env
