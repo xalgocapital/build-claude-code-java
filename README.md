@@ -29,7 +29,7 @@ core/                     每章手写实现，主线，不依赖任何 Agent �
   s19-mcp/                MCP 工具接入：stdio JSON-RPC + id 配对 + 超时 + 重连（已落地）
   s20-agent/              总装：显式装配清单 Boot + 预算裁剪 tasks→workspace + status 仪表盘（已落地）
   ...
-spring-ai-mapping/        Spring AI 2.0 对照实现，只挑框架真有对应的章
+spring-ai-mapping/        Spring AI 2.1 对照实现，只挑框架真有对应的章
   s01/                    ToolCallingAdvisor 实现同样的循环（已落地）
   s02/                    @Tool 定义工具（已落地）
   s04/                    自定义 BaseAdvisor = hooks（已落地）
@@ -41,7 +41,7 @@ spring-ai-mapping/        Spring AI 2.0 对照实现，只挑框架真有对应�
 
 `core/` 是这个系列的主线：手写循环、手写工具分发、手写权限。它回答"Claude Code 的原理是什么"。
 
-`spring-ai-mapping/` 是流量入口和对照视角：同一个机制，Spring AI 2.0 里叫什么、怎么写。它回答"生产里框架替你做了什么"。对照代码钉在 2.0.0（实测过的版本）；2.1.0 已于 2026-11-20 GA，`ToolCallingAdvisor` / `@Tool` 沿用，但 `ChatMemory` 在 2.1 被标废弃（3.0 移除，改推 Session API），见 s08 对照的说明。
+`spring-ai-mapping/` 是流量入口和对照视角：同一个机制，Spring AI 2.1 里叫什么、怎么写。它回答"生产里框架替你做了什么"。对照代码用 Spring AI 2.1.0（2026-11-20 GA，基线 Boot 4.2）实测；`ChatMemory` 在 2.1 已标废弃（3.0 移除，改推 Session API），见 s08 对照的说明。
 
 **不要用 `spring-ai-mapping/` 替代 `core/`。** Spring AI 的 `ToolCallingAdvisor` 本身就是 agent 循环——用它当主线，你看不到循环长什么样，这个系列也就没有存在的意义了。
 

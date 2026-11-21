@@ -1,6 +1,6 @@
 # s02 对照 · Spring AI 的工具定义
 
-同一个「工具分发表」，Spring AI 2.0 里怎么写。对照 `core/s02-tools` 的手写 `ToolRegistry`。
+同一个「工具分发表」，Spring AI 里怎么写。对照 `core/s02-tools` 的手写 `ToolRegistry`。
 
 ## 解决什么问题
 
@@ -38,7 +38,7 @@ public String readFile(
 
 框架做了手写版亲手写的所有事：
 
-| 手写版 | Spring AI 2.0 |
+| 手写版 | Spring AI 2.1 |
 |---|---|
 | register 里拼 parameters schema | `@Tool` / `@ToolParam` 反射生成 schema |
 | `Map<String, ToolHandler>` 查表 | 框架扫描 `@Tool` 方法建分发表 |
@@ -60,4 +60,4 @@ export MODEL_ID=deepseek-chat
 mvn -q spring-boot:run
 ```
 
-> 版本：Spring AI 2.0.0，基线 Spring Boot 4.0 + Java 21。`@Tool` 包名 `org.springframework.ai.tool.annotation.Tool`。
+> 版本：Spring AI 2.1.0，基线 Spring Boot 4.2 + Java 21。`@Tool` 包名 `org.springframework.ai.tool.annotation.Tool`。

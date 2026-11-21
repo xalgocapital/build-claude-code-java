@@ -12,7 +12,7 @@ import org.springframework.context.annotation.Bean;
 import java.util.List;
 
 /**
- * s19 的 Spring AI 2.0 对照：用官方 MCP client 接同一个 mcp-server.py。
+ * s19 的 Spring AI 对照：用官方 MCP client 接同一个 mcp-server.py。
  *
  * 手写版（core/s19-mcp）里，下面这些全是自己写的：
  *   ProcessBuilder 起进程 / 两个读线程 / pending 表按 id 配对 /

@@ -7,7 +7,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 
 /**
- * s04 的 Spring AI 2.0 对照：用 advisor 链表达「挂在循环周围的扩展」。
+ * s04 的 Spring AI 对照：用 advisor 链表达「挂在循环周围的扩展」。
  *
  * 手写版 s04 要自己写 HookRegistry、自己 register、自己在循环里 trigger。
  * 这里把这些交给框架：ChatClient 的调用会被 advisor 链自动环绕，

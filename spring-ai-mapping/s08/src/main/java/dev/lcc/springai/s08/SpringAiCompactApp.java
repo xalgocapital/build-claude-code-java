@@ -18,7 +18,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * s08 的 Spring AI 2.0 对照：上下文压缩在框架里落在哪。
+ * s08 的 Spring AI 对照：上下文压缩在框架里落在哪。
  *
  * 两件事要分别看清：
  *   1. 框架自带的 ChatMemory 只有「窗口」——超了就把最老的扔掉，不留摘要

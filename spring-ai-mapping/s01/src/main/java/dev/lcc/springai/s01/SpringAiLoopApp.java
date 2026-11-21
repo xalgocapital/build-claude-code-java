@@ -10,7 +10,7 @@ import java.io.BufferedReader;
 import java.io.InputStreamReader;
 
 /**
- * s01 的 Spring AI 2.0 对照实现。
+ * s01 的 Spring AI 对照实现。
  *
  * 对比 core/s01-loop 的手写 AgentLoop：
  *

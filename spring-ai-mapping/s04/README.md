@@ -1,6 +1,6 @@
 # s04 对照 · Spring AI 的 advisor 链
 
-手写版 s04 用注册表 + `trigger(event)` 把扩展挂在循环周围。Spring AI 2.0 里这件事叫 advisor 链——这里用一个自定义 `LoggingAdvisor` 说明对应关系。对照 `core/s04-hooks` 看。
+手写版 s04 用注册表 + `trigger(event)` 把扩展挂在循环周围。Spring AI 里这件事叫 advisor 链——这里用一个自定义 `LoggingAdvisor` 说明对应关系。对照 `core/s04-hooks` 看。
 
 ## 解决什么问题
 
@@ -18,7 +18,7 @@
 
 ## 手写版 vs 框架版
 
-| 手写版 s04 | Spring AI 2.0 |
+| 手写版 s04 | Spring AI 2.1 |
 |---|---|
 | `register(event, hook)` 挂回调 | `defaultAdvisors(new LoggingAdvisor())` 加进链 |
 | hook 的「执行前」 | `BaseAdvisor.before(request, chain)` |
@@ -39,4 +39,4 @@ export MODEL_ID=deepseek-chat
 mvn -q spring-boot:run
 ```
 
-> 版本：Spring AI 2.0.0，基线 Spring Boot 4.0 + Java 21。`BaseAdvisor` 包名 `org.springframework.ai.chat.client.advisor.api.BaseAdvisor`，`before`/`after` 是它的两个抽象方法。
+> 版本：Spring AI 2.1.0，基线 Spring Boot 4.2 + Java 21。`BaseAdvisor` 包名 `org.springframework.ai.chat.client.advisor.api.BaseAdvisor`，`before`/`after` 是它的两个抽象方法。

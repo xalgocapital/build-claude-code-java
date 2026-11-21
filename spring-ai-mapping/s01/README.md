@@ -1,10 +1,10 @@
-# s01 · Spring AI 2.0 对照
+# s01 · Spring AI 2.1 对照
 
-同一个最小循环，Spring AI 2.0 怎么写。对照 `core/s01-loop` 看，重点是**框架替你做了什么**。
+同一个最小循环，Spring AI 怎么写。对照 `core/s01-loop` 看，重点是**框架替你做了什么**。
 
 ## 解决什么问题
 
-手写版那个 `while(true)` 循环，在 Spring AI 2.0 里已经内置成 advisor——你不再自己写循环，但得知道框架在哪儿替你转、转的停止条件是什么。这一对照回答：框架版的循环藏在哪、和手写版一一对应到哪几行。
+手写版那个 `while(true)` 循环，在 Spring AI 里已经内置成 advisor——你不再自己写循环，但得知道框架在哪儿替你转、转的停止条件是什么。这一对照回答：框架版的循环藏在哪、和手写版一一对应到哪几行。
 
 ## 实验条件
 
@@ -19,15 +19,15 @@
 
 | 项 | 版本 |
 |---|---|
-| Spring AI | 2.0.0（2026-06-12 GA，本系列实测钉在此版；2.1.0 已于 2026-11-20 GA） |
+| Spring AI | 2.1.0（2026-11-20 GA，本系列实测用此版本） |
 | Spring Boot | 4.0.0 |
 | JDK | 21+ |
 
-> Spring AI 2.1.0 已于 2026-11-20 GA（基线 Boot 4.2），advisor 链这套写法沿用；2.0 线由 2.0.3 继续维护。本模块钉 2.0.0，是实测过的版本。别拿 1.x 的写法套——2.0 把工具循环从 ChatModel 内部移到了 advisor 链，`internalToolExecutionEnabled` 那套已经删除。
+> 本模块用 Spring AI 2.1.0（2026-11-20 GA，基线 Boot 4.2）实测。别拿 1.x 的写法套——2.0 起工具循环就从 ChatModel 内部移到了 advisor 链，`internalToolExecutionEnabled` 那套已经删除。
 
 ## 手写版 vs 框架版
 
-| 手写版要做的 | Spring AI 2.0 |
+| 手写版要做的 | Spring AI 2.1 |
 |---|---|
 | `while(true)` 循环 | `ToolCallingAdvisor`（递归 advisor，重入链直到模型不调工具） |
 | 工具 JSON Schema | `@Tool` 注解自动生成 |
@@ -56,4 +56,4 @@ mvn -q spring-boot:run
 
 ## 什么没对照
 
-Spring AI 2.0 能覆盖的章节有限（见仓库根 README 的索引）。s01/s02/s04/s08/s19 有直接对应；s12-s18 的任务、团队、自治、worktree 它没有官方实现，那些章只写手写版。
+Spring AI 能覆盖的章节有限（见仓库根 README 的索引）。s01/s02/s04/s08/s19 有直接对应；s12-s18 的任务、团队、自治、worktree 它没有官方实现，那些章只写手写版。

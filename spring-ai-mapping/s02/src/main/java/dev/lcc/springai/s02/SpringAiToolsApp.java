@@ -17,7 +17,7 @@ import java.util.List;
 import java.util.stream.Stream;
 
 /**
- * s02 的 Spring AI 2.0 对照实现。
+ * s02 的 Spring AI 对照实现。
  *
  * 对比 core/s02-tools 手写的 ToolRegistry 分发表：
  *

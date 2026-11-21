@@ -7,7 +7,7 @@ import org.springframework.ai.chat.client.advisor.api.BaseAdvisor;
 import org.springframework.core.Ordered;
 
 /**
- * 一个自定义环绕 advisor——这就是 Spring AI 2.0 里「hook」的等价物。
+ * 一个自定义环绕 advisor——这就是 Spring AI 里「hook」的等价物。
  *
  * 手写版 s04 的 hook 是注册表 + trigger(event)，挂在循环周围的四个点上。
  * Spring AI 没有 register_hook(event, callback) 这套 API，它把扩展点做成了

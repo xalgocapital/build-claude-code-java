@@ -16,7 +16,7 @@ import java.util.List;
 import java.util.function.Function;
 
 /**
- * s08 的 Spring AI 2.0 对照：把「上下文压缩」写成一条 advisor。
+ * s08 的 Spring AI 对照：把「上下文压缩」写成一条 advisor。
  *
  * 手写版 s08 在循环开头调 compactor.maybeCompact(messages)；
  * 框架里没有「循环」给你插入，但每次 ChatClient 调用都会穿过 advisor 链，

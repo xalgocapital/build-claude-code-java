@@ -90,13 +90,13 @@ MCP 走的是另一条路：工具在别人的进程里，stdin/stdout 上的 JS
 
 | 模块 | 结果 | 证据 |
 |---|---|---|
-| `spring-ai-mapping/s01` | PASS | 模型调用工具列出目录，返回 4 个条目 |
+| `spring-ai-mapping/s01` | PASS | 模型调用 bash 工具列出目录（README.md、pom.xml），按条数作答 |
 | `spring-ai-mapping/s02` | PASS | 模型读了 README 并总结出 `@Tool` 与 `register` 的对应关系 |
 | `spring-ai-mapping/s04` | PASS | `[advisor·before]` / `[advisor·after]` 都触发，最终回答非空 |
-| `spring-ai-mapping/s08` | PASS | `MessageWindowChatMemory(maxMessages=4)` 输出裁剪结果 |
-| `spring-ai-mapping/s19` | PASS | 握手 `Protocol: 2024-11-05`、远端 3 个工具；模型并发调 `add(2,3)` 与 `echo("hello from mcp")`，返回 `5` 与原文，最终回答把两个都念了出来 |
+| `spring-ai-mapping/s08` | PASS | advisor 压缩 14→7 条；`MessageWindowChatMemory(maxMessages=4)` 裁剪生效（纯文本历史 18→4 条） |
+| `spring-ai-mapping/s19` | PASS | 握手 `Protocol: 2024-11-05`（2.1.0 默认协议未变）、远端 3 个工具；模型并发调 `add(2,3)` 与 `echo("hello from mcp")`，返回 `5` 与原文，最终回答把两个都念了出来 |
 
-> 版本备注：对照代码钉在 Spring AI 2.0.0。2.1.0 于 2026-11-20 GA（`ChatMemory` 标废弃、MCP 加 2026-07-28 协议），上表结果未在 2.1 上重跑。
+> 版本备注：对照代码用 Spring AI 2.1.0（2026-11-20 GA，基线 Spring Boot 4.2）实测，上表五个对照于 2026-11-21 重跑全 PASS。另记一处观察：s08 那次最终回答里 DeepSeek 泄漏了内部 DSML 工具调用格式，属模型行为，与框架版本无关。
 
 ## 这一轮没验的
 

@@ -1,6 +1,6 @@
 # s19 对照 · Spring AI 的 MCP client
 
-同一个 `mcp-server.py`，Spring AI 2.0 里怎么接。对照 `core/s19-mcp` 手写的 `McpClient` + `McpTools`。
+同一个 `mcp-server.py`，Spring AI 里怎么接。对照 `core/s19-mcp` 手写的 `McpClient` + `McpTools`。
 
 ## 解决什么问题
 
@@ -14,7 +14,7 @@ Spring AI 有官方 MCP client starter。这一对照回答：这些活里，框
 
 | 项 | 状态 |
 |---|---|
-| 依赖解析（`spring-ai-starter-mcp-client` 2.0.0） | ✅ 本机联网拉通 |
+| 依赖解析（`spring-ai-starter-mcp-client` 2.1.0） | ✅ 本机联网拉通 |
 | `mvn clean compile` | ✅ 通过 |
 | 启动时连上 `python3 mcp-server.py` | ✅ 日志：`Server response with Protocol: 2024-11-05 … Info: Implementation[name=demo-mcp, version=0.1.0]`，随后 `[mcp] 远端工具 3 个：[echo, add, fail]` |
 | MCP 工具进 ChatClient 的 tools 数组 | ✅ 本地假模型收到的 `tools= ['echo', 'add', 'fail']` |
@@ -95,7 +95,7 @@ ChatClient chat = builder.defaultTools(mcpToolProvider).build();
 
 对应关系：
 
-| 手写版 | Spring AI 2.0 |
+| 手写版 | Spring AI 2.1 |
 |---|---|
 | `ProcessBuilder` + stdin/stdout 读写线程 | starter 的 `StdioClientTransport` |
 | `initialize` + `notifications/initialized` | 建连时自动做 |
@@ -132,7 +132,7 @@ export MODEL_ID=deepseek-chat
 mvn -q spring-boot:run
 ```
 
-依赖：Spring AI 2.0.0，Spring Boot 4.0.0，JDK 21。
+依赖：Spring AI 2.1.0，Spring Boot 4.2.0，JDK 21。
 
-> 版本备注：Spring AI 2.1.0（2026-11-20 GA）给 MCP 加了 2026-07-28（「modern」）协议——无 initialize、无会话，客户端能力随每个请求带，服务端用 `spring.ai.mcp.server.protocol=MODERN` 开。本模块实测时走的是 2024-11-05，握手日志里的 `Protocol` 行对应它。
+> 版本备注：Spring AI 2.1.0（2026-11-20 GA）给 MCP 加了 2026-07-28（「modern」）协议——无 initialize、无会话，客户端能力随每个请求带，服务端用 `spring.ai.mcp.server.protocol=MODERN` 开。本模块实测（2.1.0，默认协议）走的是 2024-11-05，握手日志里的 `Protocol` 行对应它。
 `mcp-server.py` 需要 python3，且在 `core/s19-mcp` 下能找到。
