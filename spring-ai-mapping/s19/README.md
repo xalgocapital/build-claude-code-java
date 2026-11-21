@@ -42,6 +42,10 @@ mvn -f spring-ai-mapping/s19/pom.xml spring-boot:run \
 启动耗时 1.368 秒，握手正常。手写版没这个问题，因为它自己 `ProcessBuilder.directory(...)`
 指定了工作目录——框架把「起进程」接走了，但没接走「在哪儿起」这件事。
 
+⚠️ 这个命令跑完**不会自己退出**：MCP client 的 stdio 连接占着非守护线程，主逻辑打完之后
+JVM 还在等。日志里出现 `=== 最终回答 ===` 就是跑完了，手动 `Ctrl+C`，或者用
+`timeout 60 ...` 包一层。挂着的进程会一直占着你终端和那个 `python3 mcp-server.py` 子进程。
+
 ## 手写版做了什么
 
 ```
