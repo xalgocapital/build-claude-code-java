@@ -18,6 +18,8 @@ core/                     每章手写实现，主线，不依赖任何 Agent �
   s08-compact/            上下文压缩：切点守 tool_call_id 配对，摘要 + 活状态回贴（已落地）
   s09-memory/             跨会话记忆：两级文件 + 目录常驻 / 正文按需 + 四条防脏（已落地）
   s10-system/             system prompt 分段拼装：按变化频率排序 + 只比字节 + 预算裁剪（已落地）
+  s11-recovery/           错误恢复：三类失败 + 等值抖动重试 + 工具错误回灌 + 死循环检测（已落地）
+  s12-task/               任务系统：任务落盘 + blockedBy 依赖 + 认领 + 重启降级孤儿（已落地）
   ...
 spring-ai-mapping/        Spring AI 2.0 对照实现，只挑框架真有对应的章
   s01/                    ToolCallingAdvisor 实现同样的循环（已落地）
@@ -80,8 +82,8 @@ mvn -q exec:java
 | s08 | Context Compact | ✅ | ✅（`spring-ai-mapping/s08`） |
 | s09 | Memory | ✅（`core/s09-memory`） | — |
 | s10 | System Prompt | ✅（`core/s10-system`） | — |
-| s11 | Error Recovery | 待更 | 计划 |
-| s12 | Task System | 待更 | — |
+| s11 | Error Recovery | ✅（`core/s11-recovery`） | — |
+| s12 | Task System | ✅（`core/s12-task`） | — |
 | s13 | Background Tasks | 待更 | — |
 | s14 | Cron Scheduler | 待更 | — |
 | s15 | Agent Teams | 待更 | — |

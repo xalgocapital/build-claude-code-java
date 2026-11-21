@@ -1,0 +1,10 @@
+{
+  "id" : "T2",
+  "subject" : "写回滚方案",
+  "status" : "ORPHANED",
+  "blockedBy" : [ "T1" ],
+  "owner" : "lead",
+  "createdAt" : "11-21 13:56:12",
+  "updatedAt" : "11-21 13:56:23",
+  "note" : "上次会话到这里就断了"
+}
