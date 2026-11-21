@@ -86,3 +86,5 @@ OPENAI_API_KEY=sk-fake OPENAI_BASE_URL=http://127.0.0.1:8909 MODEL_ID=fake-model
 7 条 = system + 原始目标 + 摘要 + 两轮工具调用。注意第 4 条是 `assistant` 而不是 `tool`——尾巴没有切在工具调用中间，`tool_call_id` 配对完好。
 
 > 版本：Spring AI 2.0.0，基线 Spring Boot 4.0 + Java 21。`BaseAdvisor` 包名 `org.springframework.ai.chat.client.advisor.api.BaseAdvisor`；`ChatMemory` 实现在 `org.springframework.ai.chat.memory`。
+>
+> ⚠️ `ChatMemory` 在 2.1（2026-11-20 GA）被标废弃，3.0 移除，官方改推 Session API（事件日志 + 按轮压缩）。本模块测的是 2.0.0 的行为；「窗口只管装不装得下、不管记不记得住」这个结论在两版里都成立。

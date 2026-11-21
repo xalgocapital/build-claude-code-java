@@ -96,6 +96,8 @@ MCP 走的是另一条路：工具在别人的进程里，stdin/stdout 上的 JS
 | `spring-ai-mapping/s08` | PASS | `MessageWindowChatMemory(maxMessages=4)` 输出裁剪结果 |
 | `spring-ai-mapping/s19` | PASS | 握手 `Protocol: 2024-11-05`、远端 3 个工具；模型并发调 `add(2,3)` 与 `echo("hello from mcp")`，返回 `5` 与原文，最终回答把两个都念了出来 |
 
+> 版本备注：对照代码钉在 Spring AI 2.0.0。2.1.0 于 2026-11-20 GA（`ChatMemory` 标废弃、MCP 加 2026-07-28 协议），上表结果未在 2.1 上重跑。
+
 ## 这一轮没验的
 
 真实的 429、503、半截 JSON、上下文超长，不可能让真实模型配合演。这些仍然只有

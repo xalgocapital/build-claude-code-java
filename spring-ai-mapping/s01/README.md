@@ -19,11 +19,11 @@
 
 | 项 | 版本 |
 |---|---|
-| Spring AI | 2.0.0（2026-06-12 GA） |
+| Spring AI | 2.0.0（2026-06-12 GA，本系列实测钉在此版；2.1.0 已于 2026-11-20 GA） |
 | Spring Boot | 4.0.0 |
 | JDK | 21+ |
 
-> Spring AI 2.0 是较新的版本，基线是 Boot 4 / Java 21。别拿 1.x 的写法套——2.0 把工具循环从 ChatModel 内部移到了 advisor 链，`internalToolExecutionEnabled` 那套已经删除。
+> Spring AI 2.1.0 已于 2026-11-20 GA（基线 Boot 4.2），advisor 链这套写法沿用；2.0 线由 2.0.3 继续维护。本模块钉 2.0.0，是实测过的版本。别拿 1.x 的写法套——2.0 把工具循环从 ChatModel 内部移到了 advisor 链，`internalToolExecutionEnabled` 那套已经删除。
 
 ## 手写版 vs 框架版
 

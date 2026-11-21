@@ -133,4 +133,6 @@ mvn -q spring-boot:run
 ```
 
 依赖：Spring AI 2.0.0，Spring Boot 4.0.0，JDK 21。
+
+> 版本备注：Spring AI 2.1.0（2026-11-20 GA）给 MCP 加了 2026-07-28（「modern」）协议——无 initialize、无会话，客户端能力随每个请求带，服务端用 `spring.ai.mcp.server.protocol=MODERN` 开。本模块实测时走的是 2024-11-05，握手日志里的 `Protocol` 行对应它。
 `mcp-server.py` 需要 python3，且在 `core/s19-mcp` 下能找到。
