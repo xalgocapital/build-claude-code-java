@@ -18,7 +18,7 @@
 
 ## 核心代码
 
-`src/main/java/dev/lcc/s01/AgentLoop.java`
+`src/main/java/com/xalgocapital/claude/s01/AgentLoop.java`
 
 ```
 messages = [system, user(query)]

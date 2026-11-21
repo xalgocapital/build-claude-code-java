@@ -49,7 +49,7 @@ export OPENAI_API_KEY=sk-xxx
 export OPENAI_BASE_URL=https://api.deepseek.com   # 不带 /v1，Spring AI 自己拼
 export MODEL_ID=deepseek-chat
 mvn -q compile
-mvn -q exec:java -Dexec.mainClass=dev.lcc.springai.s08.SpringAiCompactApp -Dexec.classpathScope=runtime
+mvn -q exec:java -Dexec.mainClass=com.xalgocapital.claude.springai.s08.SpringAiCompactApp -Dexec.classpathScope=runtime
 ```
 
 不花钱跑法：
@@ -57,7 +57,7 @@ mvn -q exec:java -Dexec.mainClass=dev.lcc.springai.s08.SpringAiCompactApp -Dexec
 ```sh
 python3 fake-endpoint.py &
 OPENAI_API_KEY=sk-fake OPENAI_BASE_URL=http://127.0.0.1:8909 MODEL_ID=fake-model \
-  mvn -q exec:java -Dexec.mainClass=dev.lcc.springai.s08.SpringAiCompactApp -Dexec.classpathScope=runtime
+  mvn -q exec:java -Dexec.mainClass=com.xalgocapital.claude.springai.s08.SpringAiCompactApp -Dexec.classpathScope=runtime
 ```
 
 ## 实测输出（假端点，实际执行）

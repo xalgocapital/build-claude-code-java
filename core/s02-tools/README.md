@@ -29,7 +29,7 @@ s02:  String out = registry.dispatch(name, args);  // 按名字查表
 ## 文件
 
 ```
-dev/lcc/s02/
+com/xalgocapital/claude/s02/
   ToolHandler.java       工具函数接口：参数 JSON -> 结果字符串
   ToolRegistry.java      分发表（本篇主角）
   BuiltinTools.java      5 个工具实现 + safePath 路径校验

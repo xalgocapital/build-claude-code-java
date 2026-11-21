@@ -3,7 +3,7 @@
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
-  <groupId>dev.lcc</groupId>
+  <groupId>com.xalgocapital.claude</groupId>
   <artifactId>s18-worktree</artifactId>
   <version>1.0.0</version>
 
@@ -28,7 +28,7 @@
         <artifactId>exec-maven-plugin</artifactId>
         <version>3.3.0</version>
         <configuration>
-          <mainClass>dev.lcc.s18.AgentLoop</mainClass>
+          <mainClass>com.xalgocapital.claude.s18.AgentLoop</mainClass>
         </configuration>
       </plugin>
     </plugins>
