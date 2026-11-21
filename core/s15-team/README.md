@@ -1,222 +1,312 @@
-# s12 · Task System
+# s15 · Agent Teams
 
-s05 的待办清单只有一个字段是可靠的：它在这一轮里是对的。
-会话一结束就没了，重启就没了，压缩之后只剩摘要里的一句话。
+s06 的子代理是一个函数：`task(description)` 进去，一句结论出来，中间的三十轮全部扔掉。
+它解决的是「别让探索过程污染我的上下文」。它解决不了另一件事：
+
+两件互不相干的活要同时查，我只想知道结果，不想自己按顺序做完两遍。
 
 ## 问题
 
-s05 那版 `TodoStore` 有三处「够用就好」：
+s06 那个 `Subagent.run()` 有三处藏不住：
 
 | 写法 | 当时为什么可以 | 什么时候不行 |
 |---|---|---|
-| 存在内存里 | 一次会话内够用 | 进程被杀、换台机器、第二天接着干 |
-| 一张平表 | 三五件事不需要依赖 | 十件事、有先后、有人认领 |
-| 「做完」由模型说 | 模型通常诚实 | 它说做完的时候，前置可能根本没做 |
+| 跑完就 return | 只要一句结论 | 中途想改它的方向，没有入口 |
+| 上下文扔掉 | 结论之外的东西都不需要 | 它记不住自己上一步做了什么 |
+| 工具表里没有 `task` | 防递归 | 它也没法跟任何别的代理说话 |
 
-第三处最隐蔽。模型把 `T3` 标成 `completed`，没有任何东西会问它「T3 的前置完成了吗」。
-摘要更不会——摘要只会把「T3 已完成」这句话抄进去，然后这句话就变成了事实。
+第三条不只是「不能递归」。**代理之间没有通道**，就意味着不能被纠正、不能汇报中间状态、
+不能在任务被抢时换个做法。s12 把任务挪到了盘上，可盘上只有任务，没有人。
 
-## 相对 s11 的改动
+## 相对 s12 的改动
 
 | 文件 | 改了什么 |
 |---|---|
-| `TaskStore.java` | 新增。落盘、依赖、认领、成环检测、孤儿降级 |
-| `AgentLoop.java` | 删掉 `TodoStore`；注册 `task_create` / `task_update` / `task_list`；system 的 `tasks` 段换成任务板 |
-| `fake-endpoint.py` | 重写。两个场景：主流程 11 轮、重启读盘 |
+| `Mailbox.java` | 新增。一人一个 `inbox.jsonl` + 一个 `cursor` |
+| `Teammate.java` | 新增。有名字、有历史、有收件箱的会话，一步一个 `step()` |
+| `Team.java` | 新增。成员表 + `spawn` / `send` / `status` / `tick` |
+| `TaskStore.java` | `update()` 加认领冲突；`owner` 传空串改成「不改」；看板写出 owner |
+| `BuiltinTools.java` | 拆出 `installReadOnly()`，成员只有 `read_file` / `glob` |
+| `AgentLoop.java` | 注册 `team_spawn` / `send_message` / `team_status`；每轮开头一次 `team.tick()` |
 
-`s11` 的错误恢复、循环检测、前缀排序全部保留。
+s11 的错误恢复、s12 的任务落盘、s10 的分段拼装全部保留。
 
-## 一个任务就是一个文件
+## 三个类，各管一件事
 
 ```
-.tasks/
-  T1.json
-  T2.json
-  T3.json
-  seq
+Team          成员表（LinkedHashMap，注册顺序就是 tick 顺序）
+  ├─ spawn(name, role, prompt)   → new Teammate(...)
+  ├─ send(from, to, text)        → mailbox.post(...)  ×N
+  ├─ status()                    → 每人一行：在干什么 / 未读几条
+  └─ tick()                      → 每个 ACTIVE 的成员 step() 一次
+
+Teammate      一个会话：自己的 messages、自己的 system、自己的工具表
+  └─ step()   收信 → 一次模型请求 → 执行 tool_calls → 有结论就返回
+
+Mailbox       .team/<name>/inbox.jsonl（只追加）+ cursor（读到第几行）
 ```
 
-`T2.json`：
+成员共享的只有 `OpenAICompatClient` 和 `TaskStore`。工具表是各自一份，
+不是权限考虑——三个人同时改一个文件，谁也说不清是谁改坏的。
+
+`task_update` 也注册了两次。lead 那份带 `blockedBy` 重排，成员那份只有
+`id` / `status` / `owner`。成员不该改依赖：它看不到全局，改一条可能让另一条永远开不了工。
+
+## 收件箱是文件
+
+```
+.team/
+  lead/
+    inbox.jsonl        成员的结论投到这里
+    cursor
+  researcher/
+    inbox.jsonl
+    cursor
+```
+
+`inbox.jsonl` 一行一条，**读了也不删**：
 
 ```json
-{
-  "id" : "T2",
-  "subject" : "写回滚方案",
-  "status" : "ORPHANED",
-  "blockedBy" : [ "T1" ],
-  "owner" : "lead",
-  "createdAt" : "11-21 13:56:12",
-  "updatedAt" : "11-21 13:56:23",
-  "note" : "上次会话到这里就断了"
-}
+{"from":"lead","to":"researcher","at":"14:11:34","text":"T1 归你。读完把时间戳格式写清楚，别只贴日志。"}
 ```
 
-一个任务一个文件，不是为了好看。是为了改一个任务不用重写整张表——
-并发认领的时候，两个人改的如果是不同文件，就不会互相覆盖。
+删掉就没有历史了。重启之后你想知道「成员上次收到的是什么」，只能翻日志。
 
-`seq` 单独存一个文件，重启后新任务从 `T4` 继续。这个细节不写会很难受：
-每次重启都从 `T1` 开始，历史记录全被覆盖。
+另存一个 `cursor` 而不是把 jsonl 改写一遍：追加是 O(1)，改写是 O(n)。
+消息多了以后，每读一次就重写整个文件是最先变慢的地方。
 
-## 依赖是约束，不是建议
+`drain()` 返回的是「这一 tick 新到的」，不是「全部」。否则成员每一步都重读同一句话，
+然后以为事情还没做完。
+
+## 调度：轮转 tick，不是线程
 
 ```java
-if (status == Status.IN_PROGRESS) {
-    List<String> waiting = new ArrayList<>();
-    for (String dep : t.blockedBy()) {
-        Task d = tasks.get(dep);
-        if (d == null || !d.done()) {
-            waiting.add(dep);
-        }
+public List<Mailbox.Msg> tick() {
+    tick++;
+    for (Teammate t : members.values()) {
+        if (t.state() != Teammate.State.ACTIVE) continue;
+        String report = t.step();
+        if (report != null) mailbox.post(t.name(), LEAD, report);
     }
-    if (!waiting.isEmpty()) {
-        throw new IllegalStateException(id + " 还等着 " + String.join(",", waiting) + " 完成");
+    return mailbox.drain(LEAD);
+}
+```
+
+三个人就是三次 HTTP 请求，串着发。没有线程池，没有 Future，没有锁。
+
+选这个的理由只有一个：**这个系列的每一次实测都要能复现**。三个线程同时跑，
+「谁先认领 T1」就由 OS 调度决定——今天的日志和明天的不一样，文章里的数字和读者
+跑出来的也不一样。轮转把这件事变成注册顺序，于是「researcher 先于 indexer 抢 T1」
+是可以写进断言的事实。
+
+代价是真的：一次请求要几秒，三个成员就是三倍，lead 干等。一个成员超时，整轮都拖住。
+这些写在「这一篇没解决的」里。
+
+## 消息下一轮才看到
+
+`tick()` 放在 `while` 的第一行：
+
+```java
+while (true) {
+    for (Mailbox.Msg m : team.tick()) {                    // ① 成员先走一步
+        from.put("content", "<team-inbox from=\"" + m.from() + "\">"
+                + m.text() + "</team-inbox>");
+        messages.add(from);                                // ② 结论进 lead 的上下文
     }
-}
+    SystemPrompt.Assembled now = buildPrompt();
+    ...
+    response = client.createChatCompletion(messages, tools);   // ③ 然后才轮到自己
 ```
 
-这段放在 `task_update` 里，不是写在提示词里让模型自己注意。
+顺序决定了延迟：lead 在这一轮末尾 `send_message`，成员要到下一轮开头的 tick 才会 `drain`
+到它。不是网络慢，也不是缓冲区没刷——是「一步只推进一次」这件事本身。
 
-提示词是建议，代码是约束。写在提示词里，模型九次遵守、一次不遵守，那一次就是
-「T3 在 T1 没做完的时候被标成了进行中」，而且没人知道。写在代码里，它连试都试不成：
+实测里那句话在第 9 次 POST 发出，researcher 在第 10 次 POST 读到，中间没有任何
+请求能提前看到它。
+
+`post` 的返回值里特意写了这一句：
 
 ```
-→ task_update(T3 → IN_PROGRESS)
-<tool-error tool="task_update">(error: T3 还等着 T2 完成)
-这次调用失败了。按错误信息改参数或换工具，别把同样的调用再发一次。</tool-error>
+Queued to researcher（收件箱未读 1 条，下一 tick 才读）
 ```
 
-错误信息里带上了等谁。模型下一轮就知道该先做 T2，而不是再试一次 T3。
+模型最容易犯的错就是投完消息等回音。
 
-## 依赖会变，所以得查环
+## 认领冲突只有一个出口
 
-需求一变，「谁等谁」就得重排。所以 `task_update` 也接受 `blockedBy`：
+两个成员看的是同一份看板，先后脚都会去抢同一条。唯一能保证「最后只有一个 owner」
+的地方，是 `TaskStore.update()` 里的三行：
 
 ```java
-Task candidate = new Task(t.id(), t.subject(), t.status(), List.copyOf(blockedBy), ...);
-tasks.put(id, candidate);
-if (createsCycle(id)) {
-    tasks.put(id, t);                    // 回滚
-    throw new IllegalArgumentException("这个依赖会形成环：" + id + " ← " + ...);
+if (!NAIVE && !owner.isBlank() && !t.owner().isBlank() && !t.owner().equals(owner)) {
+    throw new IllegalStateException(id + " 已经被 " + t.owner() + " 认领");
 }
 ```
 
-不查环的后果不是报错，是安静地卡死：A 等 B、B 等 A，两个都永远 `PENDING`，
-`ready()` 永远是空，而系统一切正常。
+它放在依赖检查之前：抢不到的东西，没必要先告诉它前置做完了没有。
 
-实测里把 `T1` 的依赖改成 `T3`（T3 等 T2，T2 等 T1），直接被拒：
-
-```
-<tool-error tool="task_update">(error: 这个依赖会形成环：T1 ← T3)
-```
-
-## 重启：in_progress 一律降级
-
-```java
-if (t.status() == Status.IN_PROGRESS) {
-    t = t.with(Status.ORPHANED, null, "上次会话到这里就断了");
-    store.save(t);
-}
-```
-
-上次会话死在一个 `in_progress` 的任务上，这件事必须留痕。
-不降级的写法会让新会话看到「T2 正在进行中」，然后它就不管了——实际上没有任何进程在做。
-
-`ORPHANED` 也不是「失败」，它是一个问句：继续，还是重开？这件事交给模型判断，
-但得让它看见。
-
-## 进 system 的那一段：看得见 ≠ 该做
+实测：
 
 ```
-Tasks on disk (they survive restarts; only the "ready" ones are yours to start):
-  ready to start:
-    T1 写迁移脚本
-  blocked (do NOT start these yet):
-    T2 写回滚方案 ← blocked by T1
-    T3 补联合索引 ← blocked by T2
-  orphaned from last session: T2 写回滚方案（决定继续还是重开）
-  completed: 1
+   [team:researcher] → task_update(T1 → IN_PROGRESS)
+   [team:researcher]   Updated T1 → IN_PROGRESS（researcher）
+   [team:indexer] → task_update(T1 → IN_PROGRESS)
+   [team:indexer]   (error: T1 已经被 researcher 认领)
 ```
 
-五栏，作用不一样：
+顺手改了 s12 的一个坑：`owner` 传空串原本是「清空」。于是成员标一次 `COMPLETED`
+就把认领记录抹掉了，认领等于没做。这一篇改成空串 = 不改。
 
-- `ready` 是「现在可以动手的」。
-- `blocked` 是「存在，但现在别碰」。**把它们藏起来是错的**——模型需要知道后面还有活，
-  否则它会把 T1 做完就宣布任务结束。
-- `in progress` 是「已经有人在做的」。
-- `orphaned` 是「上次断在这儿的」。
-- `completed` 只给个数，不列明细：做完的事除了占 token 没别的用。
+看板也写出了认领人：
 
-这一段挂在 system 的 `ROUND` 档（s10 定义的最后一档）。它每改一次任务就变，
-但它垫在最后，前面攒的前缀不受影响——实测里改任务时打印的是「前缀未变（缓存还能用）」。
+```
+in progress: T3 复核两条结论（auditor）
+```
 
-如果任务全都完成了，`ready` 和 `blocked` 两栏都会消失，只剩 `completed: 3`。
-空栏不输出，不是输出一行 `(empty)`。
+不写的话，成员看到「T3 在进行中」也照样会去抢。
+
+## team_status：谁在忙，谁的消息没人看
+
+```
+Team 3/3：
+  researcher  忙（第 3 步） 未读 1 条　角色：查清 data 目录里日志的时间戳格式
+  indexer     忙（第 3 步） 未读 1 条　角色：查清 db/schema.sql 里有没有联合索引
+  auditor     完成          未读 1 条　角色：复核另外两个人的结论有没有矛盾
+```
+
+同一份文字也挂在 system 的 `ROUND` 档（rank 95），所以 lead 每轮开场就看得到队形。
+两个出口的差别在「什么时候」：system 里那份是这一轮开头的快照；投完消息想知道
+谁还没读，得再问一次工具。
+
+那张表里有一行值得看：auditor 已经 `完成`，但收件箱还有 1 条未读。
+已完成的成员不再被 tick，投给它的消息就躺在那里没人读。这一篇没有退信机制。
 
 ## 实测
 
-主流程 11 轮、11 次 POST，11 项断言全 YES：
+主场景 6 轮 lead、5 次 tick、18 次 POST，15 项断言全 YES：
 
 ```
-tasks_on_disk=YES             .tasks/ 下 3 个文件，不是内存里的一张表
-dependency_saved=YES          T2 ← T1，T3 ← T2，依赖写在文件里
-status_saved=YES              T1 COMPLETED / T2 IN_PROGRESS，重启不会丢
-blocked_task_rejected=YES     T3 前置没完成，task_update 直接被拒
-cycle_rejected=YES            把 T1 的依赖改成 T3 会绕回去，被拒
-blocked_not_in_ready=YES      被挡住的进 system 时单独一栏
-ready_section_present=YES     中间有任务可开工时单独列出；最后没有可开工的，这一栏消失
-board_in_system_tail=YES      任务板垫在 system 末尾
-no_lost_update=YES            剧本 11 轮跑完
-script_finished=YES
+SCENARIO=main POSTS=18
+spawn_creates_member=YES        三个成员各自发过请求：researcher 5 / indexer 4 / auditor 3 次
+team_max_enforced=YES           第四个人被挡在 spawn 里，不是被提示词劝住
+system_identity_distinct=YES    lead 和三个成员的 system 身份段各不相同
+teammate_context_isolated=YES   researcher 的上下文里没有 schema.sql，indexer 的里没有 app.log
+message_delivered_next_tick=YES 第 9 次 POST 发出，researcher 在第 10 次 POST 才读到
+mailbox_on_disk=YES             .team/researcher/inbox.jsonl 里 2 行，读过也不删
+claim_conflict_rejected=YES     indexer 晚一步认领 T1，被 tool 拒绝
+single_owner=YES                T1 最后 owner=researcher、状态 COMPLETED
+member_completed_task=YES       T2 由 indexer 认领并标完成
+conclusion_back_to_lead=YES     两个成员的结论都进了 lead 的上下文
+status_shows_busy=YES           广播后 researcher 还在第 3 步，auditor 已经完成
+status_shows_unread=YES         三份收件箱各 1 条未读
+tick_round_robin_order=YES      18 次 POST 的顺序和轮转表逐项相同
+teammate_tools_readonly=YES     成员只有 glob / read_file / task_update
+script_finished=YES             剧情 6 轮跑完
 ```
 
-然后**把进程杀掉，重新起一遍**，5 项断言全 YES：
+轮转那张表，逐项对得上：
 
 ```
-tasks_restored=YES            重启后读回 4 个任务
-orphan_marked=YES             上次死在 in_progress 的 T2 被标成 ORPHANED
-seq_continues=YES             新建的是 T4，不是从 T1 再来一遍
-orphan_visible_in_system=YES  孤儿任务进了 system 的那一段
-script_finished=YES
+POST  1  lead        spawn ×4（第 4 个失败）
+POST  2  researcher  read_file
+POST  3  indexer     read_file
+POST  4  auditor     read_file
+POST  5  lead        task_create ×3
+POST  6  researcher  task_update      认领 T1，成功
+POST  7  indexer     task_update      认领 T1，被拒
+POST  8  auditor     task_update      认领 T3，成功
+POST  9  lead        send_message      ← 那句话在这一轮末尾发出
+POST 10  researcher  read_file         ← 到这一步才读到它
+POST 11  indexer     task_update ×2    改认 T2 并标完成
+POST 12  auditor     text              结论投回 lead
+POST 13  lead        send_message + team_status（广播）
+POST 14  researcher  task_update       T1 标完成
+POST 15  indexer     text              结论投回 lead
+POST 16  lead        task_list + team_status
+POST 17  researcher  text              结论投回 lead
+POST 18  lead        text              汇总
 ```
 
-启动那一行就能看出状态是不是真的从磁盘来的：
+结论回传的样子（lead 第 18 次请求里的那两条 user 消息）：
 
 ```
-   [task] 磁盘上 3 个任务：完成 1，可开工 0，孤儿 1
+<team-inbox from="indexer" at="14:11:34">db/schema.sql 里只有单列索引
+idx_orders_user_id 和 idx_orders_status，没有联合索引。T1 被 researcher 占了，我改做 T2，已经标完成。</team-inbox>
+<team-inbox from="researcher" at="14:11:34">data/app.log 的时间戳是 ISO 8601，带毫秒和
++08:00 时区，例如 2026-11-21T09:14:03.512+08:00。T1 我标完成了。</team-inbox>
 ```
 
-## 跑一遍
+收尾那一行：
 
-```sh
-SCENARIO=main    python3 fake-endpoint.py &   # 端口 8912，会清空 .tasks/ 重建
-OPENAI_API_KEY=sk-fake OPENAI_BASE_URL=http://127.0.0.1:8912/v1 \
-  MODEL_ID=fake mvn -q exec:java
-
-SCENARIO=restart python3 fake-endpoint.py &   # 不清盘，直接读上一轮留下的 .tasks/
-OPENAI_API_KEY=sk-fake OPENAI_BASE_URL=http://127.0.0.1:8912/v1 \
-  MODEL_ID=fake mvn -q exec:java
+```
+   [team] 成员 3/3，累计起过 3 个，tick 5 次，投回 lead 3 条
 ```
 
-重启那一遍必须紧接着跑，中间不要清 `.tasks/`——它测的就是「盘上还有东西」。
+## 反例：不查认领冲突
+
+`TEAM_MODE=naive` 把那三行删掉，谁最后写谁赢：
+
+```
+naive_claim_not_rejected=YES    (没人拦：indexer 的认领直接盖掉了 researcher 的)
+naive_second_claim_wins=YES     (T1 最后 owner=indexer——后来的人赢，干活的是 researcher)
+naive_task_done_by_other=YES    (T1 是 COMPLETED，但 owner 已经不是做这件事的人)
+```
+
+`T1.json` 长这样：
+
+```json
+{ "id" : "T1", "status" : "COMPLETED", "owner" : "indexer" }
+```
+
+同一份剧本，checked 那一遍 owner 是 `researcher`，naive 这一遍是 `indexer`。
+一条任务被两个人做过，而任务板上记的是那个没干活的人。
+
+这种事在只有一次对话的时候不会发生。有了第二个人，它就一定会发生。
 
 ## 这一篇没解决的
 
-- **没有并发控制**。两个进程同时改同一个任务，后写的赢。真实场景要给文件加锁或版本号。
-- **没有 owner 校验**。谁都能改任何任务，`owner` 只是个标签。
-- **没有时间维度**。任务没有 due、没有依赖超时，醒来发现「T1 三天没动」这种事不会发生。
-- **没有历史**。改一次覆盖一次，看不到状态变迁。想审计得自己加 append-only 的日志。
-- **任务和 messages 是两套状态**。压缩只压 messages，任务板在 system 里活着——这是好事，
-  但也意味着「任务里写的东西」和「对话里说的东西」可以长期不一致，没有对账机制。
+- **成员之间不能直接说话**。`Mailbox.post` 不区分方向，数据通路是通的，但成员手里没有
+  `send_message` 工具。谁能跟谁说、说了算不算数，是协议问题，不是投递问题。
+- **tick 是串行的**。一次请求要几秒，三个人就是三倍，lead 干等。真并发要处理竞态、
+  部分失败、消息乱序，这一篇用「不上线程」把它们全绕开了，也就一样没解决。
+- **没有退信**。成员完成了，投给它的消息永远躺在收件箱里，未读计数一直涨。
+- **没有超时**。一个成员卡在慢请求上，整轮都被它拖住；`MAX_STEPS=12` 只管「步数」，
+  不管「一步多久」。
+- **成员不能写文件**。这是有意的（避免同时改一个文件），但也就意味着所有写操作都回到
+  lead 一个人身上，并行只在「查」这一侧成立。
+- **没有身份校验**。`owner` 是字符串，成员可以填别人的名字。冲突检查只管「名字不同」，
+  不管「这个名字是不是你」。
+- **消息没有顺序保证**。两个成员在同一 tick 里投给 lead，谁先谁后由注册顺序决定，
+  和它们的完成时间无关。
 
 ## 实验条件
 
 | 项目 | 值 |
 | --- | --- |
 | 模型 | `deepseek-chat`（`MODEL_ID` 可换任意 OpenAI 兼容模型） |
+| 成员上限 | `TEAM_MAX` 默认 3 |
+| 收件箱目录 | `TEAM_DIR` 默认 `.team` |
 | 任务目录 | `TASK_DIR` 默认 `.tasks` |
-| 剧本（main） | 11 轮：建 3 个任务、列 1 次、改状态 5 次（含 1 次违规、1 次成环） |
-| 剧本（restart） | 2 轮：新建 1 个任务，验证序号续上 |
-| 上下文预算 | `CONTEXT_LIMIT` 默认 8000（本篇不触发压缩） |
-| 系统提示预算 | `PROMPT_BUDGET` 默认 1200；实测首轮 1171 |
+| 成员步数上限 | `MAX_STEPS=12` |
+| 剧本（main） | 6 轮 lead / 5 次 tick / 18 次 POST |
+| 成员步数 | researcher 5、indexer 4、auditor 3 |
+| 系统提示预算 | `PROMPT_BUDGET` 默认 1200；实测首轮 1239，裁掉 `workspace` |
 
-`.tasks/` 和 `data/` 都在 `.gitignore` 里，测试产物不入库。
+`.tasks/`、`.team/`、`data/`、`db/` 都在 `.gitignore` 里，`data/` 和 `db/` 由假端点在
+启动时造出来，测试产物不入库。
+
+## 跑一遍
+
+```sh
+SCENARIO=main python3 fake-endpoint.py &        # 端口 8915，会清空 .tasks/ .team/ 重建
+OPENAI_API_KEY=sk-fake OPENAI_BASE_URL=http://127.0.0.1:8915/v1 \
+  MODEL_ID=fake mvn -q exec:java
+cat /tmp/s15_assert.txt                          # 15 项全 YES
+
+SCENARIO=naive python3 fake-endpoint.py &        # 反例，要配 TEAM_MODE=naive
+OPENAI_API_KEY=sk-fake OPENAI_BASE_URL=http://127.0.0.1:8915/v1 \
+  MODEL_ID=fake TEAM_MODE=naive mvn -q exec:java
+cat /tmp/s15_naive.txt                           # 3 项全 YES
+```
+
+两遍都必须是「先起端点、再起 JVM」：端点要在第一次请求之前把 `.tasks/` 清干净。

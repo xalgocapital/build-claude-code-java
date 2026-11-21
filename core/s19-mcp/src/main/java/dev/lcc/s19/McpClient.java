@@ -24,16 +24,13 @@ import java.util.concurrent.atomic.AtomicInteger;
  *
  * 1. 起进程、按行读写。一条消息一行 JSON，这是 stdio 传输的全部约定。
  * 2. 发出去的请求先在 pending 里挂一个 future，读线程按响应里的 id 唤醒它。
- *    不能假设「发一条、收一条」——server 每个请求一个线程，慢的那个后回，
- *    一问一答的写法会把 add 的响应当成 echo 的。
- * 3. 每次等待都有上限。超时和「进程死了」是两件事：前者说明对面慢，
- *    后者说明连接没了、要重连。混在一起写，卡住的 server 会让客户端永远挂着。
+ *    不能假设「发一条、收一条」——server 每个请求一个线程，慢的那个后回。
+ * 3. 每次等待都有上限，且超时和「进程死了」分开：前者是慢，后者要重连。
  *
- * 重连也在这里：进程死了就重新起一个进程、重做一次握手，工具表不变
- * （server 是同一个，工具不会凭空长出来）。id 不归零——日志里能分出
- * 「重连前」和「重连后」，也让乱序断言不会被重复 id 骗过去。
+ * 重连也在这里。进程死了就重新起一个、重做握手；工具表不重新拉。
+ * id 不归零，日志里能分出重连前后，乱序断言也不会被重复 id 骗过去。
  */
-public class McpClient implements AutoCloseable {
+public class McpClient {
     /** 握手时带的协议版本。2024-11-05 是第一批 MCP server 普遍实现的版本 */
     public static final String PROTOCOL_VERSION = "2024-11-05";
     public static final String CLIENT_NAME = "lcc-s19";
@@ -67,12 +64,10 @@ public class McpClient implements AutoCloseable {
         }
     }
 
-    /** 一个已发出、还没配对的请求 */
     private static final class Pending {
         final int id;
         final String method;
         final CompletableFuture<JsonNode> future = new CompletableFuture<>();
-        final long sentAt = System.currentTimeMillis();
 
         Pending(int id, String method) {
             this.id = id;
@@ -131,11 +126,8 @@ public class McpClient implements AutoCloseable {
     }
 
     /**
-     * 读 stdout。每一行是一条完整消息。
-     *
-     * 唯一允许的「同步假设」是：响应里带 id。除此之外什么都不假设——
-     * 可能来通知、可能来 server 发起的请求（这里直接回 method not found）、
-     * 也可能来一条不是 JSON 的脏数据（打印出来跳过，别让读线程死掉）。
+     * 读 stdout，一行一条消息。唯一允许的同步假设是「响应里带 id」。
+     * 通知、server 发起的请求、不是 JSON 的脏数据，都不能让读线程死掉。
      */
     private void readLoop(int gen, Process p) {
         try (BufferedReader r = new BufferedReader(
@@ -169,12 +161,12 @@ public class McpClient implements AutoCloseable {
                 if (p2 != null) {
                     p2.future.complete(msg);
                 } else {
-                    // 迟到的响应：超时那一条已经从表里删了。不能当成新请求
+                    // 迟到的响应：超时那一条已经从表里删了，不能当成新请求
                     System.out.println("   [mcp] 丢弃迟到的响应 id=" + msg.get("id").asInt());
                 }
             }
         } catch (IOException ignored) {
-            // 流断了，下面统一处理
+            // 流断了，finally 统一处理
         } finally {
             if (gen == generation) {
                 alive = false;
@@ -212,21 +204,16 @@ public class McpClient implements AutoCloseable {
     }
 
     /**
-     * 同时发两条、故意让先发的那条后回。
-     *
-     * 这不是演示，是启动自检：如果哪天有人把 pending 换成「发一条等一条」，
-     * 这里会打印失败，而不是在某个慢工具上偶发地把结果配错。
+     * 同时发两条、让先发的那条后回。这不是演示，是启动自检：
+     * 谁把 pending 换成「发一条等一条」，这里会打印失败，而不是偶发地配错结果。
      */
     public void selfCheck() {
-        ObjectNode slowArgs = mapper.createObjectNode();
         ObjectNode slowParams = mapper.createObjectNode();
         slowParams.put("name", "echo");
-        slowArgs.put("text", "SLOW");
-        slowParams.set("arguments", slowArgs);
-
-        ObjectNode fastArgs = mapper.createObjectNode();
+        slowParams.set("arguments", mapper.createObjectNode().put("text", "SLOW"));
         ObjectNode fastParams = mapper.createObjectNode();
         fastParams.put("name", "add");
+        ObjectNode fastArgs = mapper.createObjectNode();
         fastArgs.put("a", 20);
         fastArgs.put("b", 22);
         fastParams.set("arguments", fastArgs);
@@ -269,7 +256,6 @@ public class McpClient implements AutoCloseable {
         int id = ids.incrementAndGet();
         Pending p = new Pending(id, method);
         pending.put(id, p);
-
         ObjectNode msg = mapper.createObjectNode();
         msg.put("jsonrpc", "2.0");
         msg.put("id", id);
@@ -386,11 +372,5 @@ public class McpClient implements AutoCloseable {
 
     public long timeoutMs() {
         return timeoutMs;
-    }
-
-    @Override
-    public void close() {
-        alive = false;
-        closeProcess();
     }
 }

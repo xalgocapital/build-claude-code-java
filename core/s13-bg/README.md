@@ -44,15 +44,9 @@ p = pb.start();                        // 立刻返回，不等
 元信息写 `.bg/<id>.json`：
 
 ```json
-{
-  "id" : "bg_1",
-  "command" : "for i in 1 2 3 4 5 6; do echo line-$i; sleep 0.5; done",
-  "pid" : 81234,
-  "status" : "exited",
-  "exit_code" : 0,
-  "offset" : 21,
-  "output" : ".bg/bg_1.out"
-}
+{ "id": "bg_1", "pid": 81234, "status": "exited",
+  "command": "for i in 1 2 3 4 5 6; do echo line-$i; sleep 0.5; done",
+  "exit_code": 0, "offset": 21, "output": ".bg/bg_1.out" }
 ```
 
 `exitCode` 单独记一份不是给模型看的，是给下一个进程看的。进程没了，文件还在——
@@ -78,15 +72,8 @@ String chunk = new String(all, (int) job.offset, (int) (all.length - job.offset)
 job.offset += fresh.getBytes(UTF_8).length;   // 读完就推进
 ```
 
-`offset` 推进到**最后一个完整行的末尾**，不是文件末尾：
-
-```java
-int cut = chunk.lastIndexOf('\n');
-if (cut < 0) {
-    if (job.alive()) return "[" + id + " running] 还没有完整的一行";
-    cut = chunk.length() - 1;
-}
-```
+`offset` 推进到**最后一个完整行的末尾**，不是文件末尾（`cut = chunk.lastIndexOf('\n')`；
+一行都没写完就先不回，进程已结束则残行照给）。
 
 理由是两件事。进程可能正好写到一半，切在文件末尾会把半个汉字留在这一轮、
 把另一半留给下一轮，解出来是乱码。切在行中间则下一轮会重复半行——

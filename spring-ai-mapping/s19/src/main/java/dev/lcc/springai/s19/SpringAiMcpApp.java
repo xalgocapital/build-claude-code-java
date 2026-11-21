@@ -23,8 +23,9 @@ import java.util.List;
  *   1. application.yml 里写一行启动命令，starter 建连接、做握手
  *   2. ToolCallbackProvider 交给 ChatClient，MCP 工具自动进工具表
  *
- * 本机没有把 spring-ai-starter-mcp-client 的依赖拉下来，所以这个文件没有编译过。
- * README 里列了需要什么、对应关系是什么、哪些地方可能跟 2.0.0 的实际 API 有偏差。
+ * 本机验证到「连上 server、列出 3 个工具、工具进了 ChatClient 的 tools 数组」。
+ * 模型那一侧用的是只回文本的本地假端点，所以 tools/call 的真实执行、超时、重连都没有验。
+ * README 里列了对应关系和哪些没验。
  */
 @SpringBootApplication
 public class SpringAiMcpApp {

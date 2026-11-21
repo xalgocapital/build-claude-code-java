@@ -164,7 +164,7 @@ client.restart();   // 重新起进程 + 重新握手
 
 ```
    [mcp] 重连第 1 次（旧进程已不在）
-   [mcp] 启动 python3 mcp-server.py（pid 80104）
+   [mcp] 启动 python3 mcp-server.py（pid 87878）
    [mcp] initialize → protocolVersion=2024-11-05，server=demo-mcp/0.1.0
 7
 ```
@@ -193,7 +193,7 @@ return result.path("isError").asBoolean(false) ? "(error: " + text + ")" : text;
 `SCENARIO=main`，7 轮，端口 8919，超时 2000ms：
 
 ```
-   [mcp] 启动 python3 mcp-server.py（pid 80068）
+   [mcp] 启动 python3 mcp-server.py（pid 87868）
    [mcp] initialize → protocolVersion=2024-11-05，server=demo-mcp/0.1.0
    [mcp] 乱序自检通过：id 3 先回 42，id 2 后回 slow-ok
    [mcp] 已接入 demo：3 个工具 mcp__demo__echo, mcp__demo__add, mcp__demo__fail
@@ -207,7 +207,7 @@ hello from mcp
 → mcp__demo__fail({})
 <tool-error tool="mcp__demo__fail">(error: boom: disk on fire (simulated)) ...
 
-   [fake] 杀掉 MCP server pid=80068
+   [fake] 杀掉 MCP server pid=87868
 
 → mcp__demo__add({"a":3,"b":4})
    [mcp] 重连第 1 次（旧进程已不在）
@@ -233,14 +233,14 @@ call_echo_text_joined=YES            content[] 里的 text 被拼成一个字符
 iserror_mapped_to_tool_error=YES     isError=true 变成 <tool-error tool="mcp__demo__fail">
 unknown_tool_explicit_error=YES      没静默成功，报的是 unknown tool
 out_of_order_responses_paired=YES    id 3 先回、id 2 后回，两条各自配对
-reconnected_after_kill=YES           新进程 80104，并重新 initialize
+reconnected_after_kill=YES           新进程 87878，并重新 initialize
 reconnect_call_succeeded=YES         重连之后 add(3,4) 回了 '7'
 timeout_returns_error=YES            HANG 的工具回了 mcp timeout 2000ms
-timeout_cut_at_two_seconds=YES       卡住到下一次 POST 之间 2.01s
+timeout_cut_at_two_seconds=YES       卡住到下一次 POST 之间 2.02s
 loop_survived=YES                    剧本 7 轮全部走完，客户端没崩
 ```
 
-`timeout_cut_at_two_seconds` 测的是「卡住那轮请求」到「下一次请求」的间隔，2.01s。
+`timeout_cut_at_two_seconds` 测的是「卡住那轮请求」到「下一次请求」的间隔，2.02s。
 断言写成 `1.9 <= x <= 4.5`，因为调度和 JVM 启动都有抖动，写等值跑两次就会红。
 
 ## 这一篇没解决的

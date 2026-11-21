@@ -54,7 +54,7 @@ public final class Teammate {
         // 两个读工具 + 认领。没有 bash / write_file，也没有 team_spawn——能干活，但不能再拉人
         this.registry = new ToolRegistry(mapper);
         BuiltinTools.installReadOnly(registry);
-        TaskTools.installUpdate(registry, tasks);
+        registerClaim();
 
         this.messages = mapper.createArrayNode();
         this.lastSystem = buildSystem();
@@ -190,6 +190,49 @@ public final class Teammate {
     private String taskSection() {
         String board = tasks.board();
         return board.isBlank() ? "" : "Tasks on disk (shared with everyone):\n" + board;
+    }
+
+    /**
+     * 成员版的 task_update：只有 id / status / owner，没有 blockedBy。
+     *
+     * 和 lead 那一份是有意分开的。成员不该重排依赖——它看不到全局，
+     * 改一条 blockedBy 可能让另一条永远开不了工，而且没人知道是谁改的。
+     */
+    private void registerClaim() {
+        ObjectNode schema = mapper.createObjectNode();
+        schema.put("type", "object");
+        ObjectNode props = mapper.createObjectNode();
+        props.set("id", prop("string", "Task id, e.g. T1"));
+        props.set("status", prop("string", "PENDING / IN_PROGRESS / COMPLETED"));
+        props.set("owner", prop("string", "Your name. Set it when you claim the task"));
+        schema.set("properties", props);
+        var req = mapper.createArrayNode();
+        req.add("id");
+        req.add("status");
+        schema.set("required", req);
+
+        registry.register("task_update",
+                "Change a task's status. Claiming a task that someone else already owns is rejected.",
+                schema,
+                args -> {
+                    try {
+                        TaskStore.Task t = tasks.update(args.path("id").asText(""),
+                                TaskStore.Status.valueOf(args.path("status").asText("PENDING").toUpperCase()),
+                                args.path("owner").asText(""));
+                        return "Updated " + t.id() + " → " + t.status()
+                                + (t.owner().isBlank() ? "" : "（" + t.owner() + "）");
+                    } catch (RuntimeException e) {
+                        // 冲突不是异常，是这一轮最该被看见的信息。原样回给模型
+                        return "(error: " + e.getMessage() + ")";
+                    }
+                });
+    }
+
+    private ObjectNode prop(String type, String desc) {
+        ObjectNode p = mapper.createObjectNode();
+        p.put("type", type);
+        p.put("description", desc);
+        return p;
     }
 
     private ObjectNode userMessage(String text) {

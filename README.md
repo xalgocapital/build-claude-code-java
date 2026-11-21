@@ -20,13 +20,21 @@ core/                     每章手写实现，主线，不依赖任何 Agent �
   s10-system/             system prompt 分段拼装：按变化频率排序 + 只比字节 + 预算裁剪（已落地）
   s11-recovery/           错误恢复：三类失败 + 等值抖动重试 + 工具错误回灌 + 死循环检测（已落地）
   s12-task/               任务系统：任务落盘 + blockedBy 依赖 + 认领 + 重启降级孤儿（已落地）
+  s13-bg/                 后台任务：输出落盘 + offset 增量读 + 完成通知走 messages（已落地）
+  s14-cron/               定时任务：手写 cron 表达式 + 调度时钟 + 错过不补跑记 skipped（已落地）
+  s15-team/               多代理团队：一人一个收件箱 + 轮转 tick + 认领只有一个 owner（已落地）
+  s16-protocol/           团队协议：信封四型 + replyTo 配对 + 超时死信 + handoff 表态（已落地）
+  s17-auto/               自主代理：按 priority 挑活 + 独立会话干活 + 三个信号记账 + 连续无进展就停（已落地）
+  s18-worktree/           工作树隔离：一人一棵 git worktree + 工具绑 cwd + 冲突不吞、主树不动（已落地）
+  s19-mcp/                MCP 工具接入：stdio JSON-RPC + id 配对 + 超时 + 重连（已落地）
+  s20-agent/              总装：显式装配清单 Boot + 预算裁剪 tasks→workspace + status 仪表盘（已落地）
   ...
 spring-ai-mapping/        Spring AI 2.0 对照实现，只挑框架真有对应的章
   s01/                    ToolCallingAdvisor 实现同样的循环（已落地）
   s02/                    @Tool 定义工具（已落地）
   s04/                    自定义 BaseAdvisor = hooks（已落地）
   s08/                    CompactionAdvisor + MessageWindowChatMemory 对照（已落地）
-  （s19 MCP 为规划项，对应篇章写完后再补对照）
+  s19/                    MCP client 接同一个 server：传输/握手/工具注册交给 starter（已落地）
 ```
 
 ## 为什么要分两块
@@ -84,11 +92,11 @@ mvn -q exec:java
 | s10 | System Prompt | ✅（`core/s10-system`） | — |
 | s11 | Error Recovery | ✅（`core/s11-recovery`） | — |
 | s12 | Task System | ✅（`core/s12-task`） | — |
-| s13 | Background Tasks | 待更 | — |
-| s14 | Cron Scheduler | 待更 | — |
-| s15 | Agent Teams | 待更 | — |
-| s16 | Team Protocols | 待更 | — |
-| s17 | Autonomous Agents | 待更 | — |
-| s18 | Worktree Isolation | 待更 | — |
-| s19 | MCP Tools | 待更 | 计划 |
-| s20 | Comprehensive Agent | 待更 | — |
+| s13 | Background Tasks | ✅（`core/s13-bg`） | — |
+| s14 | Cron Scheduler | ✅（`core/s14-cron`） | — |
+| s15 | Agent Teams | ✅（`core/s15-team`） | — |
+| s16 | Team Protocols | ✅（`core/s16-protocol`） | — |
+| s17 | Autonomous Agents | ✅（`core/s17-auto`） | — |
+| s18 | Worktree Isolation | ✅（`core/s18-worktree`） | — |
+| s19 | MCP Tools | ✅（`core/s19-mcp`） | ✅ MCP client（`spring-ai-mapping/s19`） |
+| s20 | Comprehensive Agent | ✅（`core/s20-agent`） | — |

@@ -50,7 +50,7 @@ export MODEL_ID=deepseek-chat                        # 可选
 mvn -q exec:java
 ```
 
-本地假端点端到端验证已跑通：一次返回三调用覆盖 PreToolUse 拦截（sudo 命中硬拒绝）、PreToolUse 放行、PostToolUse，被拒结果作为 tool 消息回灌模型（模型下一轮确认收到），Stop hook 统计工具调用数；`finish_reason` 故意撒谎 `stop` 仍靠扫 tool_calls 继续。未接真实模型 API（环境无 key）。
+本地假端点端到端验证已跑通：一次返回三调用覆盖 PreToolUse 拦截（sudo 命中硬拒绝）、PreToolUse 放行、PostToolUse，被拒结果作为 tool 消息回灌模型（模型下一轮确认收到），Stop hook 统计工具调用数；`finish_reason` 故意撒谎 `stop` 仍靠扫 tool_calls 继续。另有 DeepSeek deepseek-chat 真实 API 的最小会话验证。
 
 ## 和真实 CC 的差距（诚实说明）
 

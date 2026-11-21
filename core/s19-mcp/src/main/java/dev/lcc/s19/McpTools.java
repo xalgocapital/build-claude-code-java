@@ -10,17 +10,13 @@ import java.util.List;
 /**
  * s19：把远端的 MCP 工具搬进本地的 ToolRegistry。
  *
- * 名字加三段前缀 mcp__<server>__<tool>，例如 mcp__demo__echo。理由有三个：
- *   1. 两个 server 都叫 echo 的时候不会互相覆盖（本地工具也可能叫 echo）
- *   2. 模型从名字就能看出「这是远端工具」，而不是以为文件就在本地
- *   3. 排查时看日志里的一行调用，就知道该去哪个进程翻
+ * 名字加三段前缀 mcp__<server>__<tool>，例如 mcp__demo__echo：
+ * 两个 server 都有 echo 时不互相覆盖；模型看得出这不是本机工具；日志里能定位进程。
  *
- * schema 原样透传：server 给的 inputSchema 直接当 OpenAI 的 parameters 用。
- * 中间不翻译，就不会因为翻译丢掉 required、enum、嵌套对象这些字段。
- *
- * 调用结果也只做一件事：把 content[] 里的 text 拼起来。
- * MCP 的结果可以是图片、资源链接，这一篇只处理文本；isError 转成
- * "(error: ...)"，交给 AgentLoop 包成 <tool-error>（s11 的约定）。
+ * schema 原样透传——server 给的 inputSchema 直接当 OpenAI 的 parameters，
+ * 中间不翻译就不会丢掉 required、enum、嵌套对象。
+ * 结果只拼 content[] 里的 text；isError 转成 "(error: ...)"，
+ * 交给 AgentLoop 包成 <tool-error>（s11 的约定）。
  */
 public class McpTools {
     public static final String PREFIX = "mcp__";
@@ -127,9 +123,5 @@ public class McpTools {
     public String report() {
         return "server=" + server + "，重连 " + client.restarts() + " 次，超时 "
                 + client.timeouts() + " 次，单次上限 " + client.timeoutMs() + "ms";
-    }
-
-    public McpClient client() {
-        return client;
     }
 }
