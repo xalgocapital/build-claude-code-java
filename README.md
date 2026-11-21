@@ -13,6 +13,7 @@ core/                     每章手写实现，主线，不依赖任何 Agent �
   s03-permission/         三道权限闸门
   s04-hooks/              四个挂点 + 注册表（已落地）
   s05-todo/               TodoWrite 三态清单 + nag reminder（已落地）
+  s06-subagent/           子代理：独立 messages[] + 只回传结论（已落地）
   ...
 spring-ai-mapping/        Spring AI 2.0 对照实现，只挑框架真有对应的章
   s01/                    ToolCallingAdvisor 实现同样的循环（已落地）
@@ -69,7 +70,7 @@ mvn -q exec:java
 | s03 | Permission | ✅ | — |
 | s04 | Hooks | ✅ | ✅ 自定义 advisor |
 | s05 | TodoWrite | ✅ | — |
-| s06 | Subagent | 待更 | — |
+| s06 | Subagent | ✅ | — |
 | s07 | Skill Loading | 待更 | 计划 |
 | s08 | Context Compact | 待更 | 计划 |
 | s09 | Memory | 待更 | 计划 |
