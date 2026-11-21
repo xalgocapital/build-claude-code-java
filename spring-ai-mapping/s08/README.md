@@ -20,7 +20,7 @@
 | 历史 | system + 目标 + 6 轮 `read_file` 工具调用，共 14 条 |
 | 尾巴保留 | 4 条 |
 | 摘要模型 | 同一个模型，另建一个不带 advisor 的 `ChatClient` |
-| 说明 | 没有真实 key 时可跑仓库里的假端点，验证的是链路而不是模型输出 |
+| 说明 | 假端点验证的是链路而不是模型输出；本模块已用 DeepSeek deepseek-chat 真实 API 跑通（见仓库 `REAL-API-VERIFICATION.md`） |
 
 ## 手写版 vs 框架版
 

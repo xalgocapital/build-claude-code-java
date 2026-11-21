@@ -14,7 +14,7 @@
 | temperature | 服务端默认，未在代码里指定 |
 | 固定提示词 | `用一句话说明什么是 hook。` |
 | advisor | 1 个自定义 LoggingAdvisor（before/after 各打印一行） |
-| 说明 | 没有真实 key 时用一个只回文本的假端点，只演示 advisor 环绕链路；真实输出随模型版本漂移，固定以上条件才可对照片 |
+| 说明 | 假端点用于演示 advisor 环绕链路；本模块已用 DeepSeek deepseek-chat 真实 API 跑通（见仓库 `REAL-API-VERIFICATION.md`），固定以上条件才可对照片 |
 
 ## 手写版 vs 框架版
 

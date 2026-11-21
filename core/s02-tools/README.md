@@ -66,7 +66,7 @@ dev/lcc/s02/
 | system prompt | 见 `AgentLoop.SYSTEM` |
 | 固定提示词 | `Read the file README.md and tell me what this project is about.` |
 
-> 真实 API 输出会随模型版本漂移。改动任何条件后，观察结论可能不同。
+> 改动任何条件后，观察结论可能不同。
 
 ## 跑法
 

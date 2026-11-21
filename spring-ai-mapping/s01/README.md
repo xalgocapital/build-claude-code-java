@@ -13,7 +13,7 @@
 | 模型 | deepseek-chat（可换任意 OpenAI 兼容端点） |
 | temperature | 服务端默认，未在代码里指定 |
 | 固定提示词 | 见 `SpringAiLoopApp.java` 里的 user prompt |
-| 说明 | 没有真实 key 时用一个只回文本的假端点，只演示 API 链路；真实输出随模型版本漂移，固定以上条件才可对照片 |
+| 说明 | 假端点用于演示链路；本模块已用 DeepSeek deepseek-chat 真实 API 跑通（见仓库 `REAL-API-VERIFICATION.md`），固定以上条件才可对照片 |
 
 ## 环境要求
 

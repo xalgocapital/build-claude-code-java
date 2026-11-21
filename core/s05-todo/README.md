@@ -36,8 +36,7 @@
 | 固定提示词 | `Refactor 3 files: add type hints, write tests, then run them.` |
 | nag 阈值 | 连续 3 轮未更新 todo |
 
-另用本地假端点跑过端到端验证：第 1 轮调 todo_write 列 3 个 pending → 第 2/3/4 轮只干活不更新 todo → 触发一次 nag 提醒 → 第 5 轮更新为 1 done / 1 in progress / 1 pending → 收尾文字回复。确认 nag 只触发一次（注入后归零）、提醒消息确实进入 messages、arguments 对象与字符串双形态都兼容、`finish_reason` 撒谎 `tool_calls` 时靠扫空 tool_calls 正确退出。真实 API 输出会随模型版本漂移，想复现就固定上面几项。
-
+另用本地假端点跑过端到端验证：第 1 轮调 todo_write 列 3 个 pending → 第 2/3/4 轮只干活不更新 todo → 触发一次 nag 提醒 → 第 5 轮更新为 1 done / 1 in progress / 1 pending → 收尾文字回复。确认 nag 只触发一次（注入后归零）、提醒消息确实进入 messages、arguments 对象与字符串双形态都兼容、`finish_reason` 撒谎 `tool_calls` 时靠扫空 tool_calls 正确退出。
 ## 跑法
 
 ```sh

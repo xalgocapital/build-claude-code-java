@@ -39,8 +39,6 @@ Hook 的做法：循环只认 `trigger(event)` 一个动作，所有扩展逻辑
 | 固定提示词 | `Read README.md, then create a test file.` |
 | 注册的 hook | 5 个（contextInject / permission / log / largeOutput / summary） |
 
-真实 API 的输出会随模型版本漂移，想复现就把上面几项固定住。
-
 ## 跑法
 
 ```sh
